@@ -1,0 +1,86 @@
+{
+  "project_name": "Monetize Stream Dashboard",
+  "domain": "Analytics Dashboard / Link Earning System",
+  "theme": "dark",
+  "archetype": "Archetype 5 (Jewel & Luxury) with Archetype 7 (Electric) accents",
+  "overall_vibe": "Premium SaaS, smooth, lucrative, high-contrast, moody. Deep void black background with vibrant electric blue and purple gradients.",
+  "colors": {
+    "background_base": "#030305",
+    "surface_main": "#0D0D12",
+    "surface_hover": "#16161D",
+    "border_default": "rgba(255, 255, 255, 0.06)",
+    "border_active": "rgba(139, 92, 246, 0.4)",
+    "primary_gradient": "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)",
+    "primary_color": "#8B5CF6",
+    "text_h1_h2": "#FFFFFF",
+    "text_body": "#A1A1AA",
+    "text_muted": "#71717A",
+    "success": "#10B981",
+    "warning": "#F59E0B",
+    "danger": "#EF4444"
+  },
+  "typography": {
+    "headings_font": "Outfit",
+    "body_font": "Manrope",
+    "h1_hero": "text-4xl sm:text-5xl font-semibold tracking-tight",
+    "h2_section": "text-2xl sm:text-3xl font-medium tracking-tight",
+    "h3_card": "text-lg sm:text-xl font-medium text-white",
+    "body": "text-sm sm:text-base text-zinc-400 leading-relaxed",
+    "label_overline": "text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500",
+    "metric_value": "text-3xl font-semibold tracking-tight text-white",
+    "metric_label": "text-sm text-zinc-400 font-medium"
+  },
+  "layout_and_spacing": {
+    "strategy": "MODE B: CONTROL ROOM",
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6",
+    "card_padding": "p-6 sm:p-8",
+    "section_gap": "gap-8",
+    "container": "max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8",
+    "mobile_first_rule": "Always stack widgets on mobile, grid applied on md and up. Ensure max-h-[80vh] for any media on mobile."
+  },
+  "components_strategy": {
+    "cards": "Cardless style with rectangular hard edges or very subtle rounded-xl. Flat background (#0D0D12), 1px solid border (white/6). On hover: border brightens to purple-500/30 with subtle inner glow.",
+    "buttons_primary": "Vibrant gradient background (from-blue-500 to-purple-600). text-white font-medium. hover:shadow-[0_0_20px_rgba(139,92,246,0.4)] transition-all duration-300.",
+    "buttons_secondary": "Transparent background with border-white/10 and text-white. hover:bg-white/5.",
+    "inputs_and_forms": "Use Shadcn components but override default styling. bg-[#08080A], border-white/10, text-white. focus:border-purple-500 focus:ring-1 focus:ring-purple-500/50. Rounded-md.",
+    "tables_link_manager": "Shadcn Table. Header bg-black/40 (backdrop-blur), text-xs uppercase tracking-wider text-zinc-500. Rows border-b border-white/5. Hover on row: bg-white/[0.02].",
+    "charts": "Shadcn/Recharts. Use dark theme for charts. Line/Area charts with gradient fill under the curve (blue/purple). Tooltip MUST use glassmorphism: bg-black/80 backdrop-blur-md border-white/10 text-white.",
+    "modals_dialogs": "Glassmorphism backdrop: backdrop-blur-md bg-black/60. Modal surface: bg-[#0D0D12] border border-white/10 shadow-2xl. p-6 rounded-xl.",
+    "sidebar_navigation": "Collapsible sidebar for desktop, drawer for mobile. bg-[#030305] border-r border-white/5. Active link text-white bg-white/5 with a left accent border (purple-500). Inactive links text-zinc-400 hover:text-white.",
+    "tabs": "Shadcn Tabs. Override fixed h-9 to h-auto. bg-transparent border-b border-white/10. Active tab border-b-2 border-purple-500 text-white."
+  },
+  "animations_and_motion": {
+    "hover_state": "transition-all duration-300 ease-out",
+    "page_entrance": "Framer motion staggered fade-up (y: 15, opacity: 0). Use for dashboard cards and table rows.",
+    "micro_interactions": "Active states get a subtle scale (scale: 0.98 on tap). Loading states use a sleek skeleton pulse with bg-white/5."
+  },
+  "icons": {
+    "library": "lucide-react",
+    "style": "stroke-width 1.5. text-zinc-400 by default. Active/Primary icons text-purple-400 or gradient."
+  },
+  "images_media_urls": {
+    "auth_background": {
+      "url": "https://images.unsplash.com/photo-1687392946857-96c2b7f94b0d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzZ8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRhcmslMjBibHVlJTIwcHVycGxlJTIwZ3JhZGllbnQlMjAzRHxlbnwwfHx8fDE3NzYyNjU3NjZ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract dark blue and purple wavy 3D shapes. Use this as a full-screen background for the Auth (Login/Signup) page with a heavy overlay (bg-black/60 or backdrop-blur-md) so the login form is highly visible.",
+      "category": "auth_background"
+    }
+  },
+  "accessibility": {
+    "focus": "All interactive elements must have focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
+    "contrast": "Ensure text-muted (#71717A or #A1A1AA) against background (#030305 or #0D0D12) meets WCAG AA 4.5:1. Never use pure transparent backgrounds over images without a backdrop blur or dark overlay."
+  },
+  "testing": {
+    "attributes": "All interactive and key informational elements MUST include a data-testid attribute. Convention: kebab-case, role-based. Example: data-testid='login-submit-button', data-testid='copy-link-button', data-testid='withdraw-action-button'."
+  },
+  "instructions_to_main_agent": [
+    "DO NOT use Inter, Roboto, or standard fonts for Headings. Use 'Outfit'.",
+    "DO NOT use generic Vercel/Stripe component looks. Remove shadcn's default borders and apply the dark mode border-white/5 aesthetic.",
+    "DO NOT use dummyimage.com or via.placeholder.com. Use the Unsplash image provided for the auth page.",
+    "Build the 4 Top Analytics Cards using MODE B: CONTROL ROOM grid strategy. The metric value must be prominent (text-3xl font-semibold).",
+    "For the Chart.js / Recharts Monthly Analysis, use a vibrant primary gradient (blue to purple) for the line/bar, and ensure axes are legible on dark mode.",
+    "The Withdraw section should conditionally render input fields based on the selected method (UPI vs PayPal vs Crypto). Use Shadcn Select for the method dropdown.",
+    "Auth System: Build JWT/Google OAuth UI (frontend only).",
+    "Add 'Copy Link' feature with a toast notification (Sonner).",
+    "Ensure the sidebar navigation is fully responsive (hamburger menu on mobile)."
+  ]
+}
