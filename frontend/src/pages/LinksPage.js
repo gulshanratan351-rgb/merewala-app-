@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -203,6 +203,7 @@ export default function LinksPage() {
           <DialogContent className="bg-[#0D0D12] border border-white/10 text-white sm:max-w-md" data-testid="create-link-dialog">
             <DialogHeader>
               <DialogTitle className="text-white" style={{ fontFamily: 'Outfit' }}>Create New Link</DialogTitle>
+              <DialogDescription className="text-zinc-400 text-sm">Add a new monetized link to your collection</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
@@ -238,6 +239,7 @@ export default function LinksPage() {
           <DialogContent className="bg-[#0D0D12] border border-white/10 text-white sm:max-w-md" data-testid="edit-link-dialog">
             <DialogHeader>
               <DialogTitle className="text-white" style={{ fontFamily: 'Outfit' }}>Edit Link</DialogTitle>
+              <DialogDescription className="text-zinc-400 text-sm">Update your link details</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
