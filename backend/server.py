@@ -287,7 +287,13 @@ async def google_session_exchange(request: Request, response: Response):
         "created_at": datetime.now(timezone.utc),
     })
 
-    response.set_cookie(key="session_token", value=session_token, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
+    response.set_cookie(key="session_token", value=session_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+
+    # Also set JWT access_token so /auth/me works via both methods
+    access_token = create_access_token(user_id, email)
+    refresh_token_val = create_refresh_token(user_id)
+    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
+    response.set_cookie(key="refresh_token", value=refresh_token_val, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
 
     user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     user.pop("password_hash", None)
@@ -366,6 +372,17 @@ async def get_monthly_stats(request: Request, month: int = 1, year: int = 2025):
         {"_id": 0}
     ).sort("day", 1).to_list(31)
     return daily
+
+@api_router.get("/stats/daily")
+async def get_daily_stats(request: Request, day: int = 1, month: int = 1, year: int = 2025):
+    user = await get_current_user(request)
+    record = await db.daily_analytics.find_one(
+        {"user_id": user["user_id"], "day": day, "month": month, "year": year},
+        {"_id": 0}
+    )
+    if not record:
+        return {"day": day, "month": month, "year": year, "views": 0, "earnings": 0.0}
+    return record
 
 @api_router.get("/stats/yearly")
 async def get_yearly_stats(request: Request, year: int = 2025):

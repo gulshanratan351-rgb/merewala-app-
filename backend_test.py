@@ -143,6 +143,33 @@ class MonetizeStreamAPITester:
         if success:
             print(f"   Yearly data points: {len(yearly)}")
 
+        # Test NEW daily stats endpoint
+        success, daily = self.run_test(
+            "Get Daily Stats",
+            "GET",
+            "stats/daily?day=15&month=1&year=2025",
+            200
+        )
+
+        if success:
+            print(f"   Daily stats for Jan 15, 2025:")
+            print(f"     Views: {daily.get('views', 0):,}")
+            print(f"     Earnings: ${daily.get('earnings', 0):.2f}")
+            print(f"     Date: {daily.get('day')}/{daily.get('month')}/{daily.get('year')}")
+
+        # Test daily stats with no data (should return default)
+        success, daily_empty = self.run_test(
+            "Get Daily Stats (No Data)",
+            "GET",
+            "stats/daily?day=31&month=12&year=2024",
+            200
+        )
+
+        if success:
+            print(f"   Daily stats for Dec 31, 2024 (no data):")
+            print(f"     Views: {daily_empty.get('views', 0)}")
+            print(f"     Earnings: ${daily_empty.get('earnings', 0):.2f}")
+
     def test_links_crud(self):
         """Test links CRUD operations"""
         print("\n" + "="*50)

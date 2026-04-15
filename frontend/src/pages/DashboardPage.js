@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import Layout from '@/components/Layout';
 import axios from 'axios';
-import { Eye, DollarSign, Users, BarChart3, TrendingUp, TrendingDown } from 'lucide-react';
+import { Eye, DollarSign, Users, BarChart3, TrendingUp, TrendingDown, CalendarDays } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Calendar } from '@/components/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Button } from '@/components/ui/button';
 import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ComposedChart, Area
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ComposedChart, Area, Line
 } from 'recharts';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -57,6 +60,9 @@ export default function DashboardPage() {
   const [yearlyData, setYearlyData] = useState([]);
   const [selectedMonth, setSelectedMonth] = useState(String(new Date().getMonth() + 1));
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [dailyDetail, setDailyDetail] = useState(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -65,6 +71,12 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchMonthly(parseInt(selectedMonth));
   }, [selectedMonth]);
+
+  useEffect(() => {
+    if (selectedDate) {
+      fetchDailyDetail(selectedDate);
+    }
+  }, [selectedDate]);
 
   const fetchData = async () => {
     try {
@@ -91,6 +103,34 @@ export default function DashboardPage() {
     } catch (err) {
       console.error('Failed to fetch monthly', err);
     }
+  };
+
+  const fetchDailyDetail = async (date) => {
+    try {
+      const d = new Date(date);
+      const res = await axios.get(
+        `${API}/stats/daily?day=${d.getDate()}&month=${d.getMonth() + 1}&year=${d.getFullYear()}`,
+        { withCredentials: true }
+      );
+      setDailyDetail(res.data);
+    } catch (err) {
+      console.error('Failed to fetch daily', err);
+      setDailyDetail(null);
+    }
+  };
+
+  const handleDateSelect = (date) => {
+    setSelectedDate(date);
+    setCalendarOpen(false);
+    // Also update month selector to match
+    if (date) {
+      setSelectedMonth(String(date.getMonth() + 1));
+    }
+  };
+
+  const formatDate = (date) => {
+    if (!date) return 'Pick a date';
+    return new Date(date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
   if (loading) {
@@ -124,8 +164,84 @@ export default function DashboardPage() {
           <StatCard icon={BarChart3} label="Average CPM" value={stats?.avg_cpm || 0} prefix="$" trend={5.7} color="bg-amber-500/20" delay={240} />
         </div>
 
+        {/* Date Picker + Daily Detail Card */}
+        <div className="bg-[#0D0D12] border border-white/[0.06] rounded-xl p-6 mb-8 animate-fade-in-up" style={{ animationDelay: '280ms' }}>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-5">
+            <div>
+              <h2 className="text-lg font-medium text-white" style={{ fontFamily: 'Outfit' }}>Date-wise Analytics</h2>
+              <p className="text-sm text-zinc-500">Pick a date to view that day's performance</p>
+            </div>
+            <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  data-testid="date-picker-button"
+                  className="w-[220px] justify-start text-left bg-[#08080A] border-white/10 text-white hover:bg-white/5 hover:text-white"
+                >
+                  <CalendarDays className="mr-2 h-4 w-4 text-purple-400" />
+                  {formatDate(selectedDate)}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0 bg-[#0D0D12] border border-white/10" align="end" data-testid="date-picker-calendar">
+                <Calendar
+                  mode="single"
+                  selected={selectedDate}
+                  onSelect={handleDateSelect}
+                  defaultMonth={new Date(2025, parseInt(selectedMonth) - 1)}
+                  className="text-white"
+                  classNames={{
+                    months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
+                    month: "space-y-4",
+                    caption: "flex justify-center pt-1 relative items-center text-white",
+                    caption_label: "text-sm font-medium text-white",
+                    nav_button: "h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100 border border-white/10 text-white hover:bg-white/5",
+                    head_cell: "text-zinc-500 rounded-md w-9 font-normal text-[0.8rem]",
+                    cell: "h-9 w-9 text-center text-sm relative",
+                    day: "h-9 w-9 p-0 font-normal text-zinc-300 hover:bg-purple-500/20 hover:text-white rounded-md transition-colors",
+                    day_selected: "bg-purple-600 text-white hover:bg-purple-600 hover:text-white focus:bg-purple-600 focus:text-white",
+                    day_today: "bg-white/5 text-white",
+                    day_outside: "text-zinc-700",
+                    day_disabled: "text-zinc-700",
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          {/* Daily detail display */}
+          {selectedDate && dailyDetail && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-2" data-testid="daily-detail-cards">
+              <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
+                <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-1">Date</p>
+                <p className="text-lg font-semibold text-white" style={{ fontFamily: 'Outfit' }}>
+                  {formatDate(selectedDate)}
+                </p>
+              </div>
+              <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
+                <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-1">Views</p>
+                <p className="text-lg font-semibold text-blue-400" style={{ fontFamily: 'Outfit' }} data-testid="daily-views">
+                  {dailyDetail.views?.toLocaleString() || 0}
+                </p>
+              </div>
+              <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
+                <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-1">Earnings</p>
+                <p className="text-lg font-semibold text-emerald-400" style={{ fontFamily: 'Outfit' }} data-testid="daily-earnings">
+                  ${dailyDetail.earnings?.toFixed(2) || '0.00'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {!selectedDate && (
+            <div className="text-center py-6 text-zinc-600 text-sm">
+              <CalendarDays className="w-10 h-10 mx-auto mb-2 text-zinc-700" strokeWidth={1} />
+              Select a date above to see detailed stats
+            </div>
+          )}
+        </div>
+
         {/* Monthly Analysis */}
-        <div className="bg-[#0D0D12] border border-white/[0.06] rounded-xl p-6 mb-8 animate-fade-in-up" style={{ animationDelay: '300ms' }}>
+        <div className="bg-[#0D0D12] border border-white/[0.06] rounded-xl p-6 mb-8 animate-fade-in-up" style={{ animationDelay: '350ms' }}>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div>
               <h2 className="text-lg font-medium text-white" style={{ fontFamily: 'Outfit' }}>Monthly Analysis</h2>
@@ -167,7 +283,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Yearly Overview */}
-        <div className="bg-[#0D0D12] border border-white/[0.06] rounded-xl p-6 animate-fade-in-up" style={{ animationDelay: '400ms' }}>
+        <div className="bg-[#0D0D12] border border-white/[0.06] rounded-xl p-6 animate-fade-in-up" style={{ animationDelay: '420ms' }}>
           <div className="mb-6">
             <h2 className="text-lg font-medium text-white" style={{ fontFamily: 'Outfit' }}>Yearly Overview — 2025</h2>
             <p className="text-sm text-zinc-500">Monthly comparison of views vs earnings</p>
