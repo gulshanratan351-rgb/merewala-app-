@@ -26,6 +26,7 @@ function AppRouter() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/v/:videoId" element={<VideoPlayerPage />} />
+      <Route path="/watch/:videoId" element={<VideoPlayerPage />} />
       <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/links" element={<ProtectedRoute><LinksPage /></ProtectedRoute>} />
       <Route path="/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />

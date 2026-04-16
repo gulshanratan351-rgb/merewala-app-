@@ -518,7 +518,7 @@ async def generate_link(input_data: GenerateLinkInput):
     await db.videos.insert_one(video_doc)
 
     base_url = os.environ.get("FRONTEND_URL", "https://merawala.xyz")
-    link = f"{base_url}/v/{video_id}"
+    link = f"{base_url}/watch/{video_id}"
 
     return {"link": link, "video_id": video_id}
 
@@ -751,7 +751,7 @@ async def telegram_webhook(request: Request):
         await db.videos.insert_one(video_doc)
 
         base_url = os.environ.get("FRONTEND_URL", "https://merawala.xyz")
-        link = f"{base_url}/v/{video_id}"
+        link = f"{base_url}/watch/{video_id}"
 
         await telegram_send(chat_id,
             f"<b>Link Generated!</b>\n\n"

@@ -62,7 +62,7 @@ export default function BotInfoPage() {
   };
 
   const copyKey = () => { navigator.clipboard.writeText(apiKey); toast.success('API key copied'); };
-  const copyLink = (videoId) => { navigator.clipboard.writeText(`${window.location.origin}/v/${videoId}`); toast.success('Link copied'); };
+  const copyLink = (videoId) => { navigator.clipboard.writeText(`${window.location.origin}/watch/${videoId}`); toast.success('Link copied'); };
   const handleDelete = async (videoId) => {
     try {
       await axios.delete(`${API}/videos/${videoId}`, { withCredentials: true });
@@ -249,7 +249,7 @@ export default function BotInfoPage() {
 
 // Response
 {
-  "link": "${BASE_URL}/v/abc123",
+  "link": "${BASE_URL}/watch/abc123",
   "video_id": "abc123"
 }`}
               </pre>
