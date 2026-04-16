@@ -924,9 +924,15 @@ async def seed_admin_and_demo(database):
 @app.on_event("startup")
 async def startup():
     await seed_admin_and_demo(db)
-    # NOTE: Telegram webhook is managed by monetavideo (player app) project
-    # since merawala.xyz domain points there. Do NOT set webhook here
-    # to avoid overwriting monetavideo's webhook.
+    # Set Telegram webhook to merawala.xyz (this project's domain)
+    if TELEGRAM_TOKEN:
+        webhook_url = "https://merawala.xyz/api/telegram/webhook"
+        try:
+            async with httpx.AsyncClient() as http:
+                resp = await http.post(f"{TELEGRAM_API}/setWebhook", json={"url": webhook_url})
+                logger.info(f"Telegram webhook set: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Webhook error: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
