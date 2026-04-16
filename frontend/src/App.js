@@ -7,7 +7,6 @@ import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
 import DashboardPage from '@/pages/DashboardPage';
 import LinksPage from '@/pages/LinksPage';
-import VideosPage from '@/pages/VideosPage';
 import BillingPage from '@/pages/BillingPage';
 import BotInfoPage from '@/pages/BotInfoPage';
 import { Toaster } from 'sonner';
@@ -26,7 +25,6 @@ function AppRouter() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-      <Route path="/videos" element={<ProtectedRoute><VideosPage /></ProtectedRoute>} />
       <Route path="/links" element={<ProtectedRoute><LinksPage /></ProtectedRoute>} />
       <Route path="/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
       <Route path="/bot" element={<ProtectedRoute><BotInfoPage /></ProtectedRoute>} />

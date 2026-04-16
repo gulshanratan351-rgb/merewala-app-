@@ -144,8 +144,9 @@ class ViewInput(BaseModel):
     video_id: str
     watch_duration: int = 0  # seconds watched
 
-EARNING_PER_VIEW = 0.007  # $0.007 per view ($7 per 1000 views)
-MIN_WATCH_SECONDS = 20    # minimum 20 seconds to count as view
+EARNING_PER_VIEW_FIRST = 0.001   # $1 per 1000 views (first 1000)
+EARNING_PER_VIEW_AFTER = 0.002   # $2 per 1000 views (after 1000)
+MIN_WATCH_SECONDS = 20           # minimum 20 seconds to count as view
 
 # ─── Auth Routes ───
 @api_router.post("/auth/register")
@@ -548,8 +549,12 @@ async def record_view(input_data: ViewInput):
             "watched": input_data.watch_duration,
         }
 
-    # Increment view and earnings
-    earning = EARNING_PER_VIEW
+    # Increment view and earnings (Tiered CPM)
+    # First 1000 views: $1 CPM ($0.001/view)
+    # After 1000 views: $2 CPM ($0.002/view)
+    current_views = video.get("views", 0)
+    earning = EARNING_PER_VIEW_FIRST if current_views < 1000 else EARNING_PER_VIEW_AFTER
+
     await db.videos.update_one(
         {"video_id": input_data.video_id},
         {"$inc": {"views": 1, "earnings": earning}}
