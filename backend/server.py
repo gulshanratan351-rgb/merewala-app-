@@ -646,9 +646,17 @@ async def telegram_webhook(request: Request):
     # Handle /api command - link API key
     if text.startswith("/api "):
         api_key = text[5:].strip()
+        logger.info(f"Telegram /api command - key received: {api_key[:6]}...{api_key[-4:]}")
         user = await db.users.find_one({"api_key": api_key}, {"_id": 0})
         if not user:
-            await telegram_send(chat_id, "Invalid API key. Check your key at merawala.xyz → Bot & API")
+            # Try partial match in case of copy-paste issues
+            logger.info(f"Key not found. Total users in DB: {await db.users.count_documents({})}")
+            await telegram_send(chat_id,
+                "Invalid API key.\n\n"
+                "Go to dashboard → Bot & API → Copy key\n"
+                "Then send: /api YOUR_KEY\n\n"
+                "Make sure you copy the FULL key starting with ms_"
+            )
             return {"ok": True}
 
         # Store chat_id → api_key mapping
