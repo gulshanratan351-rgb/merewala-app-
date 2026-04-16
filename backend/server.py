@@ -135,6 +135,18 @@ class WithdrawRequest(BaseModel):
     amount: float
     details: dict  # method-specific details
 
+class GenerateLinkInput(BaseModel):
+    api_key: str
+    file_id: str
+    file_name: str = "Untitled Video"
+
+class ViewInput(BaseModel):
+    video_id: str
+    watch_duration: int = 0  # seconds watched
+
+EARNING_PER_VIEW = 0.007  # $0.007 per view ($7 per 1000 views)
+MIN_WATCH_SECONDS = 20    # minimum 20 seconds to count as view
+
 # ─── Auth Routes ───
 @api_router.post("/auth/register")
 async def register(input_data: RegisterInput, response: Response):
@@ -352,15 +364,24 @@ async def delete_link(link_id: str, request: Request):
 async def get_stats(request: Request):
     user = await get_current_user(request)
     links = await db.links.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(1000)
-    total_views = sum(l.get("views", 0) for l in links)
-    total_earnings = sum(l.get("earnings", 0) for l in links)
-    referral_earnings = total_earnings * 0.15  # 15% referral model
+    videos = await db.videos.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(1000)
+    link_views = sum(l.get("views", 0) for l in links)
+    link_earnings = sum(l.get("earnings", 0) for l in links)
+    video_views = sum(v.get("views", 0) for v in videos)
+    video_earnings = sum(v.get("earnings", 0) for v in videos)
+    total_views = link_views + video_views
+    total_earnings = link_earnings + video_earnings
+    referral_earnings = total_earnings * 0.15
     avg_cpm = (total_earnings / total_views * 1000) if total_views > 0 else 0.0
     return {
         "total_views": total_views,
         "total_earnings": round(total_earnings, 2),
         "referral_earnings": round(referral_earnings, 2),
         "avg_cpm": round(avg_cpm, 2),
+        "video_views": video_views,
+        "video_earnings": round(video_earnings, 2),
+        "link_views": link_views,
+        "link_earnings": round(link_earnings, 2),
     }
 
 @api_router.get("/stats/monthly")
@@ -474,10 +495,118 @@ async def bot_upload(request: Request):
     link_doc.pop("_id", None)
     return {"short_link": f"https://merawala.xyz/{short_code}", "link": link_doc}
 
+# ─── Video / Generate Link System ───
+
+@api_router.post("/generate-link")
+async def generate_link(input_data: GenerateLinkInput):
+    """Public API - Telegram bot calls this with api_key to generate video link"""
+    user = await db.users.find_one({"api_key": input_data.api_key}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    video_id = uuid.uuid4().hex[:10]
+    video_doc = {
+        "video_id": video_id,
+        "user_id": user["user_id"],
+        "file_id": input_data.file_id,
+        "file_name": input_data.file_name,
+        "views": 0,
+        "earnings": 0.0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.videos.insert_one(video_doc)
+
+    base_url = os.environ.get("FRONTEND_URL", "https://merawala.xyz")
+    link = f"{base_url}/v/{video_id}"
+
+    return {"link": link, "video_id": video_id}
+
+@api_router.get("/video/{video_id}")
+async def get_video(video_id: str):
+    """Public API - Android app calls this to get video info"""
+    video = await db.videos.find_one({"video_id": video_id}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return {
+        "video_id": video["video_id"],
+        "file_id": video["file_id"],
+        "file_name": video["file_name"],
+        "views": video["views"],
+    }
+
+@api_router.post("/view")
+async def record_view(input_data: ViewInput):
+    """Public API - Android app calls this after 20+ seconds of playback"""
+    video = await db.videos.find_one({"video_id": input_data.video_id}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    if input_data.watch_duration < MIN_WATCH_SECONDS:
+        return {
+            "counted": False,
+            "message": f"Minimum {MIN_WATCH_SECONDS} seconds watch required",
+            "watched": input_data.watch_duration,
+        }
+
+    # Increment view and earnings
+    earning = EARNING_PER_VIEW
+    await db.videos.update_one(
+        {"video_id": input_data.video_id},
+        {"$inc": {"views": 1, "earnings": earning}}
+    )
+
+    # Also update user balance
+    await db.users.update_one(
+        {"user_id": video["user_id"]},
+        {"$inc": {"balance": earning}}
+    )
+
+    # Update daily analytics
+    now = datetime.now(timezone.utc)
+    await db.daily_analytics.update_one(
+        {"user_id": video["user_id"], "year": now.year, "month": now.month, "day": now.day},
+        {"$inc": {"views": 1, "earnings": earning}},
+        upsert=True
+    )
+
+    # Update monthly analytics
+    await db.monthly_analytics.update_one(
+        {"user_id": video["user_id"], "year": now.year, "month": now.month},
+        {"$inc": {"views": 1, "earnings": earning}},
+        upsert=True
+    )
+
+    updated = await db.videos.find_one({"video_id": input_data.video_id}, {"_id": 0})
+    return {
+        "counted": True,
+        "views": updated["views"],
+        "earnings": round(updated["earnings"], 4),
+        "earned_this_view": earning,
+    }
+
+@api_router.get("/videos")
+async def get_videos(request: Request, search: str = ""):
+    """Dashboard API - list user's videos"""
+    user = await get_current_user(request)
+    query = {"user_id": user["user_id"]}
+    if search:
+        query["file_name"] = {"$regex": search, "$options": "i"}
+    videos = await db.videos.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return videos
+
+@api_router.delete("/videos/{video_id}")
+async def delete_video(video_id: str, request: Request):
+    """Dashboard API - delete a video"""
+    user = await get_current_user(request)
+    result = await db.videos.delete_one({"video_id": video_id, "user_id": user["user_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return {"message": "Video deleted"}
+
 # ─── Root ───
 @api_router.get("/")
 async def root():
-    return {"message": "Monetize Stream API"}
+    return {"message": "Merawala API"}
 
 # Include router
 app.include_router(api_router)
@@ -589,6 +718,8 @@ async def seed_admin_and_demo(database):
     await database.users.create_index("api_key")
     await database.links.create_index("user_id")
     await database.links.create_index("link_id", unique=True)
+    await database.videos.create_index("video_id", unique=True)
+    await database.videos.create_index("user_id")
     await database.login_attempts.create_index("identifier")
     await database.daily_analytics.create_index([("user_id", 1), ("year", 1), ("month", 1)])
     await database.monthly_analytics.create_index([("user_id", 1), ("year", 1)])

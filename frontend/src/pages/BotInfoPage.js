@@ -131,36 +131,63 @@ export default function BotInfoPage() {
                   <Webhook className="w-5 h-5 text-blue-400" strokeWidth={1.5} />
                 </div>
                 <div>
-                  <h2 className="text-lg font-medium text-white" style={{ fontFamily: 'Outfit' }}>Webhook Setup</h2>
-                  <p className="text-xs text-zinc-500">Connect your Telegram bot</p>
+                  <h2 className="text-lg font-medium text-white" style={{ fontFamily: 'Outfit' }}>API Endpoints</h2>
+                  <p className="text-xs text-zinc-500">Connect your Telegram bot with these APIs</p>
                 </div>
               </div>
 
               <div className="space-y-4">
                 <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
-                  <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-2">Step 1 — Create Bot</p>
-                  <p className="text-sm text-zinc-300">
-                    Open Telegram, search <span className="text-purple-400 font-mono">@BotFather</span>, and create a new bot using <span className="text-purple-400 font-mono">/newbot</span>.
-                  </p>
-                </div>
-                <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
-                  <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-2">Step 2 — Set Webhook</p>
-                  <p className="text-sm text-zinc-300 mb-2">Set your bot's webhook URL to:</p>
-                  <code className="block p-3 rounded bg-black/50 text-xs text-purple-400 font-mono break-all">
-                    {process.env.REACT_APP_BACKEND_URL}/api/bot/upload
-                  </code>
-                </div>
-                <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
-                  <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-2">Step 3 — Upload Endpoint</p>
-                  <p className="text-sm text-zinc-300 mb-2">Send a POST request with your file:</p>
+                  <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-2">Main API — Generate Video Link</p>
+                  <p className="text-sm text-zinc-300 mb-2">Bot calls this when user uploads a video:</p>
                   <pre className="p-3 rounded bg-black/50 text-xs text-zinc-300 font-mono overflow-x-auto whitespace-pre">
-{`POST /api/bot/upload
+{`POST ${process.env.REACT_APP_BACKEND_URL}/api/generate-link
 Content-Type: application/json
 
 {
   "api_key": "your_api_key",
-  "file_url": "https://...",
-  "title": "My File"
+  "file_id": "telegram_file_id",
+  "file_name": "video_name.mp4"
+}
+
+Response:
+{
+  "link": "https://merawala.xyz/v/abc123",
+  "video_id": "abc123"
+}`}
+                  </pre>
+                </div>
+                <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
+                  <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-2">Get Video Info (For App)</p>
+                  <pre className="p-3 rounded bg-black/50 text-xs text-zinc-300 font-mono overflow-x-auto whitespace-pre">
+{`GET ${process.env.REACT_APP_BACKEND_URL}/api/video/{video_id}
+
+Response:
+{
+  "video_id": "abc123",
+  "file_id": "telegram_file_id",
+  "file_name": "video.mp4",
+  "views": 150
+}`}
+                  </pre>
+                </div>
+                <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
+                  <p className="text-xs font-semibold tracking-[0.15em] uppercase text-zinc-500 mb-2">Record View (App calls after 20s)</p>
+                  <pre className="p-3 rounded bg-black/50 text-xs text-zinc-300 font-mono overflow-x-auto whitespace-pre">
+{`POST ${process.env.REACT_APP_BACKEND_URL}/api/view
+Content-Type: application/json
+
+{
+  "video_id": "abc123",
+  "watch_duration": 25
+}
+
+Response:
+{
+  "counted": true,
+  "views": 151,
+  "earnings": 1.057,
+  "earned_this_view": 0.007
 }`}
                   </pre>
                 </div>

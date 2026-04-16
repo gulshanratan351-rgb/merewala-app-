@@ -13,6 +13,8 @@ class MonetizeStreamAPITester:
         self.tests_passed = 0
         self.access_token = None
         self.user_data = None
+        self.api_key = None
+        self.test_video_id = None
 
     def run_test(self, name, method, endpoint, expected_status, data=None, headers=None):
         """Run a single API test"""
@@ -346,6 +348,187 @@ class MonetizeStreamAPITester:
             if success:
                 print(f"   Upload result: {upload_result.get('short_link')}")
 
+    def test_video_monetization_system(self):
+        """Test video monetization APIs"""
+        print("\n" + "="*50)
+        print("📹 TESTING VIDEO MONETIZATION SYSTEM")
+        print("="*50)
+
+        # First get API key for testing
+        if not self.api_key:
+            success, response = self.run_test(
+                "Get API Key for Video Tests",
+                "GET",
+                "bot/api-key",
+                200
+            )
+            if success and 'api_key' in response:
+                self.api_key = response['api_key']
+                print(f"   📋 API Key obtained: {self.api_key[:20]}...")
+
+        # Test 1: POST /api/generate-link with valid API key
+        if self.api_key:
+            test_data = {
+                "api_key": self.api_key,
+                "file_id": "test_file_12345",
+                "file_name": "Test Video Monetization.mp4"
+            }
+            
+            success, response = self.run_test(
+                "Generate Video Link - Valid API Key",
+                "POST",
+                "generate-link",
+                200,
+                data=test_data
+            )
+            
+            if success and 'video_id' in response:
+                self.test_video_id = response['video_id']
+                print(f"   📋 Generated video_id: {self.test_video_id}")
+                print(f"   🔗 Generated link: {response.get('link', 'N/A')}")
+
+        # Test 2: POST /api/generate-link with invalid API key
+        invalid_data = {
+            "api_key": "invalid_api_key_123",
+            "file_id": "test_file_67890",
+            "file_name": "Invalid Test Video.mp4"
+        }
+        
+        self.run_test(
+            "Generate Video Link - Invalid API Key",
+            "POST",
+            "generate-link",
+            401,
+            data=invalid_data
+        )
+
+        # Test 3: GET /api/video/{id} with existing video
+        self.run_test(
+            "Get Video Info - Existing Video",
+            "GET",
+            "video/9e803baff0",
+            200
+        )
+
+        # Test 4: GET /api/video/{id} with our generated video
+        if self.test_video_id:
+            success, response = self.run_test(
+                "Get Video Info - Generated Video",
+                "GET",
+                f"video/{self.test_video_id}",
+                200
+            )
+            
+            if success:
+                required_fields = ['video_id', 'file_id', 'file_name', 'views']
+                missing_fields = [field for field in required_fields if field not in response]
+                if missing_fields:
+                    print(f"   ❌ Missing required fields: {missing_fields}")
+                else:
+                    print(f"   ✅ All required fields present")
+
+        # Test 5: GET /api/video/invalid_id returns 404
+        self.run_test(
+            "Get Video Info - Invalid ID",
+            "GET",
+            "video/invalid_video_id_123",
+            404
+        )
+
+        # Test 6: POST /api/view with watch_duration < 20 (should NOT count)
+        short_watch_data = {
+            "video_id": "9e803baff0",
+            "watch_duration": 15
+        }
+        
+        success, response = self.run_test(
+            "Record View - Short Watch Duration",
+            "POST",
+            "view",
+            200,
+            data=short_watch_data
+        )
+        
+        if success:
+            if response.get('counted') == False:
+                print(f"   ✅ View correctly NOT counted for {short_watch_data['watch_duration']}s watch")
+            else:
+                print(f"   ❌ View should NOT be counted for short watch duration")
+
+        # Test 7: POST /api/view with watch_duration >= 20 (should count and add $0.007)
+        long_watch_data = {
+            "video_id": "9e803baff0",
+            "watch_duration": 25
+        }
+        
+        success, response = self.run_test(
+            "Record View - Long Watch Duration",
+            "POST",
+            "view",
+            200,
+            data=long_watch_data
+        )
+        
+        if success:
+            if response.get('counted') == True:
+                print(f"   ✅ View correctly counted for {long_watch_data['watch_duration']}s watch")
+                earned = response.get('earned_this_view', 0)
+                if earned == 0.007:
+                    print(f"   ✅ Correct earning amount: ${earned}")
+                else:
+                    print(f"   ❌ Incorrect earning amount: ${earned} (expected $0.007)")
+            else:
+                print(f"   ❌ View should be counted for long watch duration")
+
+        # Test 8: GET /api/videos (authenticated) - list user's videos
+        success, response = self.run_test(
+            "Get Videos List - Authenticated",
+            "GET",
+            "videos",
+            200
+        )
+        
+        if success and isinstance(response, list):
+            print(f"   📋 Found {len(response)} videos in user's account")
+
+        # Test 9: DELETE /api/videos/{id} (authenticated) - delete video
+        if self.test_video_id:
+            success, response = self.run_test(
+                "Delete Video - Authenticated",
+                "DELETE",
+                f"videos/{self.test_video_id}",
+                200
+            )
+            
+            if success:
+                print(f"   ✅ Successfully deleted test video {self.test_video_id}")
+
+    def test_dashboard_stats_video_integration(self):
+        """Test that dashboard stats include video views and earnings"""
+        print("\n" + "="*50)
+        print("📊 TESTING DASHBOARD STATS VIDEO INTEGRATION")
+        print("="*50)
+
+        success, response = self.run_test(
+            "Dashboard Stats Include Video Data",
+            "GET",
+            "stats",
+            200
+        )
+        
+        if success:
+            required_video_fields = ['video_views', 'video_earnings']
+            missing_fields = [field for field in required_video_fields if field not in response]
+            
+            if missing_fields:
+                print(f"   ❌ Missing video stats fields: {missing_fields}")
+            else:
+                print(f"   ✅ Dashboard includes video stats")
+                print(f"   📊 Video views: {response.get('video_views', 0)}")
+                print(f"   💰 Video earnings: ${response.get('video_earnings', 0)}")
+                print(f"   📊 Total views: {response.get('total_views', 0)}")
+                print(f"   💰 Total earnings: ${response.get('total_earnings', 0)}")
+
     def test_logout(self):
         """Test logout functionality"""
         print("\n" + "="*50)
@@ -390,6 +573,11 @@ class MonetizeStreamAPITester:
             self.test_links_crud()
             self.test_billing_system()
             self.test_bot_api_system()
+            
+            # NEW: Test video monetization system
+            self.test_video_monetization_system()
+            self.test_dashboard_stats_video_integration()
+            
             self.test_logout()
 
         except Exception as e:
