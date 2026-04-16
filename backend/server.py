@@ -608,6 +608,122 @@ async def delete_video(video_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Video not found")
     return {"message": "Video deleted"}
 
+# ─── Telegram Bot Webhook ───
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+
+async def telegram_send(chat_id: int, text: str, parse_mode: str = "HTML"):
+    """Send message to Telegram user"""
+    async with httpx.AsyncClient() as http:
+        await http.post(f"{TELEGRAM_API}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+        })
+
+@api_router.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Telegram sends updates here when users interact with bot"""
+    body = await request.json()
+    message = body.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    text = message.get("text", "")
+
+    if not chat_id:
+        return {"ok": True}
+
+    # Handle /start command
+    if text.startswith("/start"):
+        await telegram_send(chat_id,
+            "<b>Welcome to Merawala Bot!</b>\n\n"
+            "1. First link your API key:\n"
+            "<code>/api YOUR_API_KEY</code>\n\n"
+            "2. Then send any video/document to get a earning link!\n\n"
+            "Get your API key from merawala.xyz → Bot & API"
+        )
+        return {"ok": True}
+
+    # Handle /api command - link API key
+    if text.startswith("/api "):
+        api_key = text[5:].strip()
+        user = await db.users.find_one({"api_key": api_key}, {"_id": 0})
+        if not user:
+            await telegram_send(chat_id, "Invalid API key. Check your key at merawala.xyz → Bot & API")
+            return {"ok": True}
+
+        # Store chat_id → api_key mapping
+        await db.telegram_users.update_one(
+            {"chat_id": chat_id},
+            {"$set": {"chat_id": chat_id, "api_key": api_key, "user_id": user["user_id"], "linked_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True
+        )
+        masked = api_key[:4] + "****" + api_key[-4:]
+        await telegram_send(chat_id, f"API key linked successfully!\nKey: <code>{masked}</code>\n\nNow send any video to get an earning link!")
+        return {"ok": True}
+
+    # Handle /help command
+    if text.startswith("/help"):
+        await telegram_send(chat_id,
+            "<b>Merawala Bot Commands:</b>\n\n"
+            "/start - Welcome message\n"
+            "/api YOUR_KEY - Link your API key\n"
+            "/help - Show this help\n\n"
+            "Just send any video or file to get an earning link!"
+        )
+        return {"ok": True}
+
+    # Handle video/document upload
+    file_id = None
+    file_name = "video"
+
+    if message.get("video"):
+        file_id = message["video"]["file_id"]
+        file_name = message["video"].get("file_name", f"video_{message['video'].get('file_unique_id', 'unknown')}.mp4")
+    elif message.get("document"):
+        file_id = message["document"]["file_id"]
+        file_name = message["document"].get("file_name", "file")
+    elif message.get("animation"):
+        file_id = message["animation"]["file_id"]
+        file_name = message["animation"].get("file_name", "animation.gif")
+
+    if file_id:
+        # Find linked user
+        tg_user = await db.telegram_users.find_one({"chat_id": chat_id}, {"_id": 0})
+        if not tg_user:
+            await telegram_send(chat_id, "Please link your API key first!\nSend: <code>/api YOUR_API_KEY</code>\n\nGet your key at merawala.xyz → Bot & API")
+            return {"ok": True}
+
+        # Generate link
+        video_id = uuid.uuid4().hex[:10]
+        video_doc = {
+            "video_id": video_id,
+            "user_id": tg_user["user_id"],
+            "file_id": file_id,
+            "file_name": file_name,
+            "views": 0,
+            "earnings": 0.0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.videos.insert_one(video_doc)
+
+        base_url = os.environ.get("FRONTEND_URL", "https://merawala.xyz")
+        link = f"{base_url}/v/{video_id}"
+
+        await telegram_send(chat_id,
+            f"<b>Link Generated!</b>\n\n"
+            f"File: {file_name}\n"
+            f"Link: {link}\n\n"
+            f"Share this link to earn!\n"
+            f"$1 CPM (first 1000) → $2 CPM (after 1000)"
+        )
+        return {"ok": True}
+
+    # Unknown message
+    if text and not text.startswith("/"):
+        await telegram_send(chat_id, "Send a video or file to get an earning link!\n\nNeed help? Send /help")
+
+    return {"ok": True}
+
 # ─── Root ───
 @api_router.get("/")
 async def root():
@@ -725,6 +841,7 @@ async def seed_admin_and_demo(database):
     await database.links.create_index("link_id", unique=True)
     await database.videos.create_index("video_id", unique=True)
     await database.videos.create_index("user_id")
+    await database.telegram_users.create_index("chat_id", unique=True)
     await database.login_attempts.create_index("identifier")
     await database.daily_analytics.create_index([("user_id", 1), ("year", 1), ("month", 1)])
     await database.monthly_analytics.create_index([("user_id", 1), ("year", 1)])
@@ -732,6 +849,15 @@ async def seed_admin_and_demo(database):
 @app.on_event("startup")
 async def startup():
     await seed_admin_and_demo(db)
+    # Set Telegram webhook
+    if TELEGRAM_TOKEN:
+        webhook_url = os.environ.get("FRONTEND_URL", "").rstrip("/") + "/api/telegram/webhook"
+        try:
+            async with httpx.AsyncClient() as http:
+                resp = await http.post(f"{TELEGRAM_API}/setWebhook", json={"url": webhook_url})
+                logger.info(f"Telegram webhook set: {resp.json()}")
+        except Exception as e:
+            logger.error(f"Failed to set Telegram webhook: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
