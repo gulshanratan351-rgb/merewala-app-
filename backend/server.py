@@ -524,15 +524,30 @@ async def generate_link(input_data: GenerateLinkInput):
 
 @api_router.get("/video/{video_id}")
 async def get_video(video_id: str):
-    """Public API - Android app calls this to get video info"""
+    """Public API - Returns video info + Telegram file download URL"""
     video = await db.videos.find_one({"video_id": video_id}, {"_id": 0})
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+
+    # Get Telegram file download URL
+    file_url = None
+    if TELEGRAM_TOKEN and video.get("file_id"):
+        try:
+            async with httpx.AsyncClient() as http:
+                resp = await http.get(f"{TELEGRAM_API}/getFile", params={"file_id": video["file_id"]})
+                data = resp.json()
+                if data.get("ok"):
+                    file_path = data["result"]["file_path"]
+                    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        except Exception as e:
+            logger.error(f"Failed to get Telegram file URL: {e}")
+
     return {
         "video_id": video["video_id"],
         "file_id": video["file_id"],
         "file_name": video["file_name"],
         "views": video["views"],
+        "file_url": file_url,
     }
 
 @api_router.post("/view")

@@ -9,6 +9,7 @@ import DashboardPage from '@/pages/DashboardPage';
 import LinksPage from '@/pages/LinksPage';
 import BillingPage from '@/pages/BillingPage';
 import BotInfoPage from '@/pages/BotInfoPage';
+import VideoPlayerPage from '@/pages/VideoPlayerPage';
 import { Toaster } from 'sonner';
 import '@/App.css';
 
@@ -24,6 +25,7 @@ function AppRouter() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/v/:videoId" element={<VideoPlayerPage />} />
       <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/links" element={<ProtectedRoute><LinksPage /></ProtectedRoute>} />
       <Route path="/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
