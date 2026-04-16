@@ -27,7 +27,7 @@ export default function Sidebar() {
         <div className="w-9 h-9 rounded-lg gradient-btn flex items-center justify-center">
           <Zap className="w-5 h-5 text-white" strokeWidth={1.5} />
         </div>
-        <span className="text-white font-semibold text-lg tracking-tight" style={{ fontFamily: 'Outfit' }}>
+        <span className="font-bold text-xl tracking-tight gradient-text" style={{ fontFamily: 'Outfit' }}>
           Merawala
         </span>
       </div>

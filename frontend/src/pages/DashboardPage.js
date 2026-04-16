@@ -153,7 +153,7 @@ export default function DashboardPage() {
           <h1 className="text-2xl sm:text-3xl font-semibold text-white tracking-tight" style={{ fontFamily: 'Outfit' }}>
             Dashboard
           </h1>
-          <p className="text-sm text-zinc-400 mt-1">Overview of your monetization performance</p>
+          <p className="text-sm text-zinc-400 mt-1">Overview of your <span className="text-purple-400">Merawala</span> performance</p>
         </div>
 
         {/* Stat Cards */}

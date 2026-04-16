@@ -53,10 +53,10 @@ export default function LoginPage() {
             <div className="w-12 h-12 rounded-xl gradient-btn flex items-center justify-center mx-auto mb-4">
               <Zap className="w-6 h-6 text-white" strokeWidth={1.5} />
             </div>
-            <h1 className="text-2xl font-semibold text-white tracking-tight" style={{ fontFamily: 'Outfit' }}>
-              Welcome back
+            <h1 className="text-2xl font-semibold tracking-tight" style={{ fontFamily: 'Outfit' }}>
+              Welcome to <span className="gradient-text font-bold">Merawala</span>
             </h1>
-            <p className="text-sm text-zinc-400 mt-2">Sign in to your Merawala account</p>
+            <p className="text-sm text-zinc-400 mt-2">Sign in to your account</p>
           </div>
 
           {error && (

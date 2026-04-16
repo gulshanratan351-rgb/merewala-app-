@@ -52,10 +52,10 @@ export default function RegisterPage() {
             <div className="w-12 h-12 rounded-xl gradient-btn flex items-center justify-center mx-auto mb-4">
               <Zap className="w-6 h-6 text-white" strokeWidth={1.5} />
             </div>
-            <h1 className="text-2xl font-semibold text-white tracking-tight" style={{ fontFamily: 'Outfit' }}>
-              Create account
+            <h1 className="text-2xl font-semibold tracking-tight" style={{ fontFamily: 'Outfit' }}>
+              Join <span className="gradient-text font-bold">Merawala</span>
             </h1>
-            <p className="text-sm text-zinc-400 mt-2">Start earning with Merawala today</p>
+            <p className="text-sm text-zinc-400 mt-2">Start earning with your content today</p>
           </div>
 
           {error && (
