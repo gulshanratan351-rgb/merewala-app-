@@ -893,9 +893,9 @@ async def seed_admin_and_demo(database):
 @app.on_event("startup")
 async def startup():
     await seed_admin_and_demo(db)
-    # Set Telegram webhook
+    # Set Telegram webhook - always use preview URL for webhook (our backend)
     if TELEGRAM_TOKEN:
-        webhook_url = os.environ.get("FRONTEND_URL", "").rstrip("/") + "/api/telegram/webhook"
+        webhook_url = "https://earn-track-pro-2.preview.emergentagent.com/api/telegram/webhook"
         try:
             async with httpx.AsyncClient() as http:
                 resp = await http.post(f"{TELEGRAM_API}/setWebhook", json={"url": webhook_url})
