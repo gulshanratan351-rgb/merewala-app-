@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { LayoutDashboard, Link2, Wallet, Bot, LogOut, Menu, X, Zap } from 'lucide-react';
+import { LayoutDashboard, Link2, Wallet, Bot, LogOut, Menu, X, Zap, Shield } from 'lucide-react';
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/links', label: 'Link Manager', icon: Link2 },
   { path: '/billing', label: 'Billing', icon: Wallet },
   { path: '/bot', label: 'Bot & API', icon: Bot },
+  { path: '/admin', label: 'Admin', icon: Shield },
 ];
 
 export default function Sidebar() {

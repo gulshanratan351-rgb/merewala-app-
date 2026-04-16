@@ -10,6 +10,7 @@ import LinksPage from '@/pages/LinksPage';
 import BillingPage from '@/pages/BillingPage';
 import BotInfoPage from '@/pages/BotInfoPage';
 import VideoPlayerPage from '@/pages/VideoPlayerPage';
+import AdminPage from '@/pages/AdminPage';
 import { Toaster } from 'sonner';
 import '@/App.css';
 
@@ -31,6 +32,7 @@ function AppRouter() {
       <Route path="/links" element={<ProtectedRoute><LinksPage /></ProtectedRoute>} />
       <Route path="/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
       <Route path="/bot" element={<ProtectedRoute><BotInfoPage /></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

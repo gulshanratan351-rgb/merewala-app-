@@ -1,3 +1,6 @@
+# ─── Merawala Dashboard Backend ───
+# Synced with Player App (monetavideo) — Same MongoDB Atlas (merewala_db)
+
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -15,13 +18,13 @@ import uuid
 import secrets
 import random
 import string
+import hashlib
 import httpx
 from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
-from bson import ObjectId
+from pydantic import BaseModel
+from typing import Optional
 
-# MongoDB connection
+# ─── Config ───
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
@@ -30,6 +33,10 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 JWT_ALGORITHM = "HS256"
+EARNING_PER_VIEW_FIRST = 0.001  # $1 CPM (first 1000 views)
+EARNING_PER_VIEW_AFTER = 0.002  # $2 CPM (after 1000 views)
+DEFAULT_CPM = 2.0               # Default global CPM ($2)
+VIEW_COOLDOWN_SECONDS = 300     # 5 min cooldown per IP+video
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -52,14 +59,29 @@ def create_refresh_token(user_id: str) -> str:
     payload = {"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "refresh"}
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
-def generate_short_code(length=8):
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+def generate_code(length=10):
+    """Generate unique video code for share links"""
+    return uuid.uuid4().hex[:length]
 
 def generate_api_key():
     return f"ms_{secrets.token_hex(24)}"
 
+def get_viewer_fingerprint(request: Request):
+    """Create fingerprint from IP + User-Agent for anti-fraud"""
+    ip = request.client.host if request.client else "unknown"
+    ua = request.headers.get("user-agent", "unknown")
+    raw = f"{ip}:{ua}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+async def get_global_cpm():
+    """Get global CPM from settings collection"""
+    settings = await db.settings.find_one({"key": "global_cpm"}, {"_id": 0})
+    if settings:
+        return settings.get("value", DEFAULT_CPM)
+    return DEFAULT_CPM
+
 async def get_current_user(request: Request) -> dict:
-    # Check session_token cookie first (Google Auth)
+    # Check session_token cookie (Google Auth)
     session_token = request.cookies.get("session_token")
     if session_token:
         session = await db.user_sessions.find_one({"session_token": session_token}, {"_id": 0})
@@ -75,13 +97,13 @@ async def get_current_user(request: Request) -> dict:
                     user.pop("password_hash", None)
                     return user
 
-    # Check JWT access_token cookie
+    # Check JWT access_token cookie or Bearer header
     token = request.cookies.get("access_token")
     if not token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            # Could be a session token passed as Bearer
+            # Could be a session token
             session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
             if session:
                 expires_at = session.get("expires_at")
@@ -97,7 +119,6 @@ async def get_current_user(request: Request) -> dict:
 
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-
     try:
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get("type") != "access":
@@ -131,50 +152,61 @@ class LinkUpdate(BaseModel):
     original_url: Optional[str] = None
 
 class WithdrawRequest(BaseModel):
-    method: str  # upi, bank, paypal, crypto
+    method: str
     amount: float
-    details: dict  # method-specific details
+    details: dict
 
 class GenerateLinkInput(BaseModel):
     api_key: str
     file_id: str
     file_name: str = "Untitled Video"
+    title: Optional[str] = None
+    description: Optional[str] = None
+    thumbnail: Optional[str] = None
 
 class ViewInput(BaseModel):
     video_id: str
-    watch_duration: int = 0  # seconds watched
+    watch_duration: int = 0
 
-EARNING_PER_VIEW_FIRST = 0.001   # $1 per 1000 views (first 1000)
-EARNING_PER_VIEW_AFTER = 0.002   # $2 per 1000 views (after 1000)
-MIN_WATCH_SECONDS = 20           # minimum 20 seconds to count as view
+class UpdateViewsInput(BaseModel):
+    video_id: str
+    watch_percentage: float = 0
 
-# ─── Auth Routes ───
+class AdminVideoAction(BaseModel):
+    video_id: str
+    action: str  # approve, reject, delete
+
+class AdminCPMUpdate(BaseModel):
+    cpm: float
+
+class AdminSubscriptionUpdate(BaseModel):
+    user_id: str
+    subscription: str  # free, basic, premium
+
+class AdminSettingsUpdate(BaseModel):
+    allow_download: Optional[bool] = None
+
+# ═══════════════════════════════════════
+#  AUTH ROUTES
+# ═══════════════════════════════════════
+
 @api_router.post("/auth/register")
 async def register(input_data: RegisterInput, response: Response):
     email = input_data.email.lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-
     user_id = f"user_{uuid.uuid4().hex[:12]}"
-    user_doc = {
-        "user_id": user_id,
-        "email": email,
-        "name": input_data.name,
+    await db.users.insert_one({
+        "user_id": user_id, "email": email, "name": input_data.name,
         "password_hash": hash_password(input_data.password),
-        "role": "user",
-        "subscription": "free",
-        "balance": 0.0,
-        "api_key": generate_api_key(),
-        "created_at": datetime.now(timezone.utc),
-    }
-    await db.users.insert_one(user_doc)
-
+        "role": "user", "subscription": "free", "balance": 0.0,
+        "api_key": generate_api_key(), "created_at": datetime.now(timezone.utc),
+    })
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
-
     return {"user_id": user_id, "email": email, "name": input_data.name, "role": "user"}
 
 @api_router.post("/auth/login")
@@ -182,7 +214,6 @@ async def login(input_data: LoginInput, request: Request, response: Response):
     email = input_data.email.lower().strip()
     ip = request.client.host if request.client else "unknown"
     identifier = f"{ip}:{email}"
-
     # Brute force check
     attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
     if attempt and attempt.get("count", 0) >= 5:
@@ -194,33 +225,19 @@ async def login(input_data: LoginInput, request: Request, response: Response):
                 locked_until = locked_until.replace(tzinfo=timezone.utc)
             if locked_until > datetime.now(timezone.utc):
                 raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
-
     user = await db.users.find_one({"email": email})
     if not user or not user.get("password_hash"):
-        await db.login_attempts.update_one(
-            {"identifier": identifier},
-            {"$inc": {"count": 1}, "$set": {"locked_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}},
-            upsert=True
-        )
+        await db.login_attempts.update_one({"identifier": identifier}, {"$inc": {"count": 1}, "$set": {"locked_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid email or password")
-
     if not verify_password(input_data.password, user["password_hash"]):
-        await db.login_attempts.update_one(
-            {"identifier": identifier},
-            {"$inc": {"count": 1}, "$set": {"locked_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}},
-            upsert=True
-        )
+        await db.login_attempts.update_one({"identifier": identifier}, {"$inc": {"count": 1}, "$set": {"locked_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    # Clear attempts on success
     await db.login_attempts.delete_many({"identifier": identifier})
-    user_id = user.get("user_id", str(user["_id"]))
-
+    user_id = user.get("user_id", str(user.get("_id", "")))
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
-
     return {"user_id": user_id, "email": user["email"], "name": user.get("name", ""), "role": user.get("role", "user")}
 
 @api_router.post("/auth/logout")
@@ -232,8 +249,7 @@ async def logout(response: Response):
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
-    user = await get_current_user(request)
-    return user
+    return await get_current_user(request)
 
 @api_router.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
@@ -253,80 +269,59 @@ async def refresh_token(request: Request, response: Response):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-# ─── Google OAuth Session Exchange ───
+# Google OAuth session exchange
 @api_router.post("/auth/google/session")
 async def google_session_exchange(request: Request, response: Response):
     body = await request.json()
     session_id = body.get("session_id")
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id required")
-
     async with httpx.AsyncClient() as http_client:
-        resp = await http_client.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id}
-        )
+        resp = await http_client.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": session_id})
         if resp.status_code != 200:
             raise HTTPException(status_code=401, detail="Invalid session")
         data = resp.json()
-
     email = data.get("email", "").lower()
     name = data.get("name", "")
     picture = data.get("picture", "")
     session_token = data.get("session_token", "")
-
-    # Find or create user
     existing = await db.users.find_one({"email": email})
     if existing:
-        user_id = existing.get("user_id", str(existing["_id"]))
+        user_id = existing.get("user_id", str(existing.get("_id", "")))
         await db.users.update_one({"email": email}, {"$set": {"name": name, "picture": picture}})
     else:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         await db.users.insert_one({
-            "user_id": user_id,
-            "email": email,
-            "name": name,
-            "picture": picture,
-            "role": "user",
-            "subscription": "free",
-            "balance": 0.0,
-            "api_key": generate_api_key(),
-            "created_at": datetime.now(timezone.utc),
+            "user_id": user_id, "email": email, "name": name, "picture": picture,
+            "role": "user", "subscription": "free", "balance": 0.0,
+            "api_key": generate_api_key(), "created_at": datetime.now(timezone.utc),
         })
-
-    # Store session
     await db.user_sessions.insert_one({
-        "user_id": user_id,
-        "session_token": session_token,
+        "user_id": user_id, "session_token": session_token,
         "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
         "created_at": datetime.now(timezone.utc),
     })
-
     response.set_cookie(key="session_token", value=session_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
-
-    # Also set JWT access_token so /auth/me works via both methods
     access_token = create_access_token(user_id, email)
     refresh_token_val = create_refresh_token(user_id)
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token_val, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
-
     user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     user.pop("password_hash", None)
     return user
 
-# ─── Links CRUD ───
+# ═══════════════════════════════════════
+#  LINKS CRUD (existing feature)
+# ═══════════════════════════════════════
+
 @api_router.post("/links")
 async def create_link(link: LinkCreate, request: Request):
     user = await get_current_user(request)
-    short_code = generate_short_code()
+    short_code = generate_code(8)
     link_doc = {
-        "link_id": str(uuid.uuid4()),
-        "user_id": user["user_id"],
-        "title": link.title,
-        "original_url": link.original_url,
-        "short_code": short_code,
-        "views": 0,
-        "earnings": 0.0,
+        "link_id": str(uuid.uuid4()), "user_id": user["user_id"],
+        "title": link.title, "original_url": link.original_url,
+        "short_code": short_code, "views": 0, "earnings": 0.0,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.links.insert_one(link_doc)
@@ -339,8 +334,7 @@ async def get_links(request: Request, search: str = ""):
     query = {"user_id": user["user_id"]}
     if search:
         query["title"] = {"$regex": search, "$options": "i"}
-    links = await db.links.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return links
+    return await db.links.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 @api_router.put("/links/{link_id}")
 async def update_link(link_id: str, link: LinkUpdate, request: Request):
@@ -351,8 +345,7 @@ async def update_link(link_id: str, link: LinkUpdate, request: Request):
     result = await db.links.update_one({"link_id": link_id, "user_id": user["user_id"]}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Link not found")
-    updated = await db.links.find_one({"link_id": link_id}, {"_id": 0})
-    return updated
+    return await db.links.find_one({"link_id": link_id}, {"_id": 0})
 
 @api_router.delete("/links/{link_id}")
 async def delete_link(link_id: str, request: Request):
@@ -362,86 +355,291 @@ async def delete_link(link_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Link not found")
     return {"message": "Link deleted"}
 
-# ─── Stats / Analytics ───
+# ═══════════════════════════════════════
+#  VIDEO SYSTEM (Synced with Player App)
+# ═══════════════════════════════════════
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+BASE_URL = os.environ.get("FRONTEND_URL", "https://merawala.xyz")
+
+async def get_telegram_file_url(file_id: str) -> str:
+    """Get download URL from Telegram file_id"""
+    if not TELEGRAM_TOKEN or not file_id:
+        return None
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id})
+            data = resp.json()
+            if data.get("ok"):
+                return f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{data['result']['file_path']}"
+    except Exception as e:
+        logger.error(f"Telegram getFile error: {e}")
+    return None
+
+# POST /api/generate-link — Bot/API creates video entry
+@api_router.post("/generate-link")
+async def generate_link(input_data: GenerateLinkInput):
+    """Bot calls this to create a video entry and get shareable link"""
+    user = await db.users.find_one({"api_key": input_data.api_key}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    code = generate_code(10)
+    video_url = await get_telegram_file_url(input_data.file_id)
+    share_link = f"{BASE_URL}/watch/{code}"
+
+    video_doc = {
+        "code": code,
+        "video_id": code,  # alias for compatibility
+        "shareLink": share_link,
+        "title": input_data.title or input_data.file_name,
+        "description": input_data.description or "",
+        "thumbnail": input_data.thumbnail or "",
+        "videoUrl": video_url or "",
+        "file_id": input_data.file_id,
+        "file_name": input_data.file_name,
+        "views": 0,
+        "validViews": 0,
+        "earnings": 0.0,
+        "status": "approved",  # auto-approve bot uploads
+        "ownerId": user["user_id"],
+        "user_id": user["user_id"],  # alias
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),  # alias
+    }
+    await db.videos.insert_one(video_doc)
+    return {"link": share_link, "video_id": code, "code": code}
+
+# GET /api/video/{video_id} — Original endpoint (kept for compatibility)
+@api_router.get("/video/{video_id}")
+async def get_video(video_id: str):
+    """Public — get video info by video_id or code"""
+    video = await db.videos.find_one({"$or": [{"video_id": video_id}, {"code": video_id}]}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    file_url = video.get("videoUrl") or await get_telegram_file_url(video.get("file_id", ""))
+    return {
+        "video_id": video.get("code", video.get("video_id", "")),
+        "code": video.get("code", video.get("video_id", "")),
+        "file_id": video.get("file_id", ""),
+        "file_name": video.get("file_name", video.get("title", "")),
+        "title": video.get("title", video.get("file_name", "")),
+        "description": video.get("description", ""),
+        "thumbnail": video.get("thumbnail", ""),
+        "videoUrl": file_url,
+        "file_url": file_url,
+        "views": video.get("views", 0),
+        "validViews": video.get("validViews", 0),
+        "earnings": video.get("earnings", 0),
+        "status": video.get("status", "approved"),
+        "shareLink": video.get("shareLink", f"{BASE_URL}/watch/{video.get('code', video.get('video_id', ''))}"),
+    }
+
+# GET /api/watch/{code} — Player App fetches video data
+@api_router.get("/watch/{code}")
+async def watch_video(code: str):
+    """Public — Player app fetches video data by code"""
+    video = await db.videos.find_one({"$or": [{"code": code}, {"video_id": code}]}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    file_url = video.get("videoUrl") or await get_telegram_file_url(video.get("file_id", ""))
+    # Get allow_download setting
+    settings = await db.settings.find_one({"key": "allow_download"}, {"_id": 0})
+    allow_download = settings.get("value", True) if settings else True
+    return {
+        "code": video.get("code", video.get("video_id", "")),
+        "video_id": video.get("code", video.get("video_id", "")),
+        "title": video.get("title", video.get("file_name", "")),
+        "description": video.get("description", ""),
+        "thumbnail": video.get("thumbnail", ""),
+        "videoUrl": file_url,
+        "file_url": file_url,
+        "file_id": video.get("file_id", ""),
+        "file_name": video.get("file_name", ""),
+        "views": video.get("views", 0),
+        "validViews": video.get("validViews", 0),
+        "status": video.get("status", "approved"),
+        "ownerId": video.get("ownerId", video.get("user_id", "")),
+        "shareLink": video.get("shareLink", f"{BASE_URL}/watch/{code}"),
+        "createdAt": video.get("createdAt", video.get("created_at", "")),
+        "allowDownload": allow_download,
+    }
+
+# GET /api/public/related/{code} — Player App fetches related videos
+@api_router.get("/public/related/{code}")
+async def get_related_videos(code: str):
+    """Public — Related approved videos for player app"""
+    related = await db.videos.find(
+        {"$or": [{"code": {"$ne": code}}, {"video_id": {"$ne": code}}], "status": "approved"},
+        {"_id": 0, "code": 1, "video_id": 1, "title": 1, "file_name": 1,
+         "thumbnail": 1, "views": 1, "shareLink": 1, "createdAt": 1, "created_at": 1}
+    ).sort("views", -1).limit(10).to_list(10)
+    # Normalize fields
+    result = []
+    for v in related:
+        result.append({
+            "code": v.get("code", v.get("video_id", "")),
+            "title": v.get("title", v.get("file_name", "")),
+            "thumbnail": v.get("thumbnail", ""),
+            "views": v.get("views", 0),
+            "shareLink": v.get("shareLink", ""),
+            "createdAt": v.get("createdAt", v.get("created_at", "")),
+        })
+    return result
+
+# POST /api/view — Count view after 20s watch (with anti-fraud)
+@api_router.post("/view")
+async def record_view(input_data: ViewInput, request: Request):
+    """Public — Android/web calls after 20s watch"""
+    vid = input_data.video_id
+    video = await db.videos.find_one({"$or": [{"video_id": vid}, {"code": vid}]}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if input_data.watch_duration < 20:
+        return {"counted": False, "message": "Minimum 20 seconds watch required", "watched": input_data.watch_duration}
+
+    # Anti-fraud: IP + UA cooldown
+    fingerprint = get_viewer_fingerprint(request)
+    vcode = video.get("code", video.get("video_id", ""))
+    cooldown_key = f"{fingerprint}:{vcode}"
+    recent = await db.view_logs.find_one({"key": cooldown_key, "timestamp": {"$gte": datetime.now(timezone.utc) - timedelta(seconds=VIEW_COOLDOWN_SECONDS)}}, {"_id": 0})
+    if recent:
+        return {"counted": False, "message": "View already counted recently", "cooldown": VIEW_COOLDOWN_SECONDS}
+
+    # Log this view
+    await db.view_logs.insert_one({"key": cooldown_key, "timestamp": datetime.now(timezone.utc)})
+
+    # Calculate earning
+    cpm = await get_global_cpm()
+    earning = cpm / 1000
+    owner_id = video.get("ownerId", video.get("user_id", ""))
+
+    await db.videos.update_one({"$or": [{"video_id": vid}, {"code": vid}]}, {"$inc": {"views": 1, "validViews": 1, "earnings": earning}})
+    await db.users.update_one({"user_id": owner_id}, {"$inc": {"balance": earning}})
+    now = datetime.now(timezone.utc)
+    await db.daily_analytics.update_one({"user_id": owner_id, "year": now.year, "month": now.month, "day": now.day}, {"$inc": {"views": 1, "earnings": earning}}, upsert=True)
+    await db.monthly_analytics.update_one({"user_id": owner_id, "year": now.year, "month": now.month}, {"$inc": {"views": 1, "earnings": earning}}, upsert=True)
+
+    updated = await db.videos.find_one({"$or": [{"video_id": vid}, {"code": vid}]}, {"_id": 0})
+    return {"counted": True, "views": updated.get("views", 0), "validViews": updated.get("validViews", 0), "earnings": round(updated.get("earnings", 0), 4), "earned_this_view": earning}
+
+# POST /api/update-views — Player app calls at 80% watch (with anti-fraud)
+@api_router.post("/update-views")
+async def update_views(input_data: UpdateViewsInput, request: Request):
+    """Public — Player app calls when 80% watched"""
+    vid = input_data.video_id
+    video = await db.videos.find_one({"$or": [{"video_id": vid}, {"code": vid}]}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if input_data.watch_percentage < 80:
+        return {"counted": False, "message": "Minimum 80% watch required", "watch_percentage": input_data.watch_percentage}
+
+    # Anti-fraud
+    fingerprint = get_viewer_fingerprint(request)
+    vcode = video.get("code", video.get("video_id", ""))
+    cooldown_key = f"{fingerprint}:{vcode}:pct"
+    recent = await db.view_logs.find_one({"key": cooldown_key, "timestamp": {"$gte": datetime.now(timezone.utc) - timedelta(seconds=VIEW_COOLDOWN_SECONDS)}}, {"_id": 0})
+    if recent:
+        return {"counted": False, "message": "View already counted recently", "cooldown": VIEW_COOLDOWN_SECONDS}
+    await db.view_logs.insert_one({"key": cooldown_key, "timestamp": datetime.now(timezone.utc)})
+
+    cpm = await get_global_cpm()
+    earning = cpm / 1000
+    owner_id = video.get("ownerId", video.get("user_id", ""))
+
+    await db.videos.update_one({"$or": [{"video_id": vid}, {"code": vid}]}, {"$inc": {"views": 1, "validViews": 1, "earnings": earning}})
+    await db.users.update_one({"user_id": owner_id}, {"$inc": {"balance": earning}})
+    now = datetime.now(timezone.utc)
+    await db.daily_analytics.update_one({"user_id": owner_id, "year": now.year, "month": now.month, "day": now.day}, {"$inc": {"views": 1, "earnings": earning}}, upsert=True)
+    await db.monthly_analytics.update_one({"user_id": owner_id, "year": now.year, "month": now.month}, {"$inc": {"views": 1, "earnings": earning}}, upsert=True)
+
+    updated = await db.videos.find_one({"$or": [{"video_id": vid}, {"code": vid}]}, {"_id": 0})
+    return {"counted": True, "views": updated.get("views", 0), "validViews": updated.get("validViews", 0), "earnings": round(updated.get("earnings", 0), 4), "earned_this_view": earning}
+
+# GET /api/videos — Dashboard: list user's videos
+@api_router.get("/videos")
+async def get_videos(request: Request, search: str = ""):
+    user = await get_current_user(request)
+    query = {"$or": [{"user_id": user["user_id"]}, {"ownerId": user["user_id"]}]}
+    if search:
+        query["$and"] = [query.pop("$or") and {"$or": [{"user_id": user["user_id"]}, {"ownerId": user["user_id"]}]}, {"$or": [{"title": {"$regex": search, "$options": "i"}}, {"file_name": {"$regex": search, "$options": "i"}}]}]
+    videos = await db.videos.find({"$or": [{"user_id": user["user_id"]}, {"ownerId": user["user_id"]}]}, {"_id": 0}).sort("createdAt", -1).to_list(500)
+    if search:
+        s = search.lower()
+        videos = [v for v in videos if s in v.get("title", "").lower() or s in v.get("file_name", "").lower()]
+    return videos
+
+@api_router.delete("/videos/{video_id}")
+async def delete_video(video_id: str, request: Request):
+    user = await get_current_user(request)
+    result = await db.videos.delete_one({"$or": [{"video_id": video_id}, {"code": video_id}], "$or": [{"user_id": user["user_id"]}, {"ownerId": user["user_id"]}]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return {"message": "Video deleted"}
+
+# ═══════════════════════════════════════
+#  STATS / ANALYTICS
+# ═══════════════════════════════════════
+
 @api_router.get("/stats")
 async def get_stats(request: Request):
     user = await get_current_user(request)
-    links = await db.links.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(1000)
-    videos = await db.videos.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(1000)
-    link_views = sum(l.get("views", 0) for l in links)
-    link_earnings = sum(l.get("earnings", 0) for l in links)
-    video_views = sum(v.get("views", 0) for v in videos)
-    video_earnings = sum(v.get("earnings", 0) for v in videos)
-    total_views = link_views + video_views
-    total_earnings = link_earnings + video_earnings
-    referral_earnings = total_earnings * 0.15
-    avg_cpm = (total_earnings / total_views * 1000) if total_views > 0 else 0.0
+    uid = user["user_id"]
+    links = await db.links.find({"user_id": uid}, {"_id": 0}).to_list(1000)
+    videos = await db.videos.find({"$or": [{"user_id": uid}, {"ownerId": uid}]}, {"_id": 0}).to_list(1000)
+    lv = sum(l.get("views", 0) for l in links)
+    le = sum(l.get("earnings", 0) for l in links)
+    vv = sum(v.get("views", 0) for v in videos)
+    ve = sum(v.get("earnings", 0) for v in videos)
+    total_views = lv + vv
+    total_earnings = le + ve
     return {
-        "total_views": total_views,
-        "total_earnings": round(total_earnings, 2),
-        "referral_earnings": round(referral_earnings, 2),
-        "avg_cpm": round(avg_cpm, 2),
-        "video_views": video_views,
-        "video_earnings": round(video_earnings, 2),
-        "link_views": link_views,
-        "link_earnings": round(link_earnings, 2),
+        "total_views": total_views, "total_earnings": round(total_earnings, 2),
+        "referral_earnings": round(total_earnings * 0.15, 2),
+        "avg_cpm": round((total_earnings / total_views * 1000) if total_views > 0 else 0, 2),
+        "video_views": vv, "video_earnings": round(ve, 2),
     }
 
 @api_router.get("/stats/monthly")
 async def get_monthly_stats(request: Request, month: int = 1, year: int = 2025):
     user = await get_current_user(request)
-    # Get daily stats from analytics collection
-    daily = await db.daily_analytics.find(
-        {"user_id": user["user_id"], "month": month, "year": year},
-        {"_id": 0}
-    ).sort("day", 1).to_list(31)
-    return daily
+    return await db.daily_analytics.find({"user_id": user["user_id"], "month": month, "year": year}, {"_id": 0}).sort("day", 1).to_list(31)
 
 @api_router.get("/stats/daily")
 async def get_daily_stats(request: Request, day: int = 1, month: int = 1, year: int = 2025):
     user = await get_current_user(request)
-    record = await db.daily_analytics.find_one(
-        {"user_id": user["user_id"], "day": day, "month": month, "year": year},
-        {"_id": 0}
-    )
-    if not record:
-        return {"day": day, "month": month, "year": year, "views": 0, "earnings": 0.0}
-    return record
+    record = await db.daily_analytics.find_one({"user_id": user["user_id"], "day": day, "month": month, "year": year}, {"_id": 0})
+    return record or {"day": day, "month": month, "year": year, "views": 0, "earnings": 0.0}
 
 @api_router.get("/stats/yearly")
 async def get_yearly_stats(request: Request, year: int = 2025):
     user = await get_current_user(request)
-    monthly = await db.monthly_analytics.find(
-        {"user_id": user["user_id"], "year": year},
-        {"_id": 0}
-    ).sort("month", 1).to_list(12)
-    return monthly
+    return await db.monthly_analytics.find({"user_id": user["user_id"], "year": year}, {"_id": 0}).sort("month", 1).to_list(12)
 
-# ─── Billing ───
+# ═══════════════════════════════════════
+#  BILLING
+# ═══════════════════════════════════════
+
 @api_router.get("/billing/balance")
 async def get_balance(request: Request):
     user = await get_current_user(request)
-    full_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "balance": 1})
-    return {"balance": full_user.get("balance", 0.0)}
+    full = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "balance": 1})
+    return {"balance": full.get("balance", 0.0) if full else 0.0}
 
 @api_router.post("/billing/withdraw")
 async def withdraw(req: WithdrawRequest, request: Request):
     user = await get_current_user(request)
-    full_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    balance = full_user.get("balance", 0.0)
+    full = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    balance = full.get("balance", 0.0) if full else 0.0
     if req.amount < 10:
         raise HTTPException(status_code=400, detail="Minimum withdrawal is $10")
     if req.amount > balance:
         raise HTTPException(status_code=400, detail="Insufficient balance")
-
     withdrawal = {
-        "withdrawal_id": str(uuid.uuid4()),
-        "user_id": user["user_id"],
-        "method": req.method,
-        "amount": req.amount,
-        "details": req.details,
-        "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "withdrawal_id": str(uuid.uuid4()), "user_id": user["user_id"],
+        "method": req.method, "amount": req.amount, "details": req.details,
+        "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.withdrawals.insert_one(withdrawal)
     await db.users.update_one({"user_id": user["user_id"]}, {"$inc": {"balance": -req.amount}})
@@ -451,15 +649,17 @@ async def withdraw(req: WithdrawRequest, request: Request):
 @api_router.get("/billing/withdrawals")
 async def get_withdrawals(request: Request):
     user = await get_current_user(request)
-    withdrawals = await db.withdrawals.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
-    return withdrawals
+    return await db.withdrawals.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
 
-# ─── Bot / API ───
+# ═══════════════════════════════════════
+#  BOT / API KEY
+# ═══════════════════════════════════════
+
 @api_router.get("/bot/api-key")
 async def get_api_key(request: Request):
     user = await get_current_user(request)
-    full_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "api_key": 1})
-    return {"api_key": full_user.get("api_key", "")}
+    full = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "api_key": 1})
+    return {"api_key": full.get("api_key", "") if full else ""}
 
 @api_router.post("/bot/regenerate-key")
 async def regenerate_api_key(request: Request):
@@ -468,343 +668,127 @@ async def regenerate_api_key(request: Request):
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"api_key": new_key}})
     return {"api_key": new_key}
 
-@api_router.post("/bot/upload")
-async def bot_upload(request: Request):
-    """Placeholder endpoint for Telegram bot file uploads"""
-    body = await request.json()
-    api_key = body.get("api_key")
-    file_url = body.get("file_url")
-    title = body.get("title", "Untitled")
+# ═══════════════════════════════════════
+#  ADMIN PANEL
+# ═══════════════════════════════════════
 
-    if not api_key or not file_url:
-        raise HTTPException(status_code=400, detail="api_key and file_url required")
-
-    user = await db.users.find_one({"api_key": api_key}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    short_code = generate_short_code()
-    link_doc = {
-        "link_id": str(uuid.uuid4()),
-        "user_id": user["user_id"],
-        "title": title,
-        "original_url": file_url,
-        "short_code": short_code,
-        "views": 0,
-        "earnings": 0.0,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.links.insert_one(link_doc)
-    link_doc.pop("_id", None)
-    return {"short_link": f"https://merawala.xyz/{short_code}", "link": link_doc}
-
-# ─── Video / Generate Link System ───
-
-@api_router.post("/generate-link")
-async def generate_link(input_data: GenerateLinkInput):
-    """Public API - Telegram bot calls this with api_key to generate video link"""
-    user = await db.users.find_one({"api_key": input_data.api_key}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    video_id = uuid.uuid4().hex[:10]
-    video_doc = {
-        "video_id": video_id,
-        "user_id": user["user_id"],
-        "file_id": input_data.file_id,
-        "file_name": input_data.file_name,
-        "views": 0,
-        "earnings": 0.0,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.videos.insert_one(video_doc)
-
-    base_url = os.environ.get("FRONTEND_URL", "https://merawala.xyz")
-    link = f"{base_url}/watch/{video_id}"
-
-    return {"link": link, "video_id": video_id}
-
-@api_router.get("/video/{video_id}")
-async def get_video(video_id: str):
-    """Public API - Returns video info + Telegram file download URL"""
-    video = await db.videos.find_one({"video_id": video_id}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    # Get Telegram file download URL
-    file_url = None
-    if TELEGRAM_TOKEN and video.get("file_id"):
-        try:
-            async with httpx.AsyncClient() as http:
-                resp = await http.get(f"{TELEGRAM_API}/getFile", params={"file_id": video["file_id"]})
-                data = resp.json()
-                if data.get("ok"):
-                    file_path = data["result"]["file_path"]
-                    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        except Exception as e:
-            logger.error(f"Failed to get Telegram file URL: {e}")
-
-    return {
-        "video_id": video["video_id"],
-        "file_id": video["file_id"],
-        "file_name": video["file_name"],
-        "views": video["views"],
-        "file_url": file_url,
-    }
-
-@api_router.post("/view")
-async def record_view(input_data: ViewInput):
-    """Public API - Android app calls this after 20+ seconds of playback"""
-    video = await db.videos.find_one({"video_id": input_data.video_id}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    if input_data.watch_duration < MIN_WATCH_SECONDS:
-        return {
-            "counted": False,
-            "message": f"Minimum {MIN_WATCH_SECONDS} seconds watch required",
-            "watched": input_data.watch_duration,
-        }
-
-    # Increment view and earnings (Tiered CPM)
-    # First 1000 views: $1 CPM ($0.001/view)
-    # After 1000 views: $2 CPM ($0.002/view)
-    current_views = video.get("views", 0)
-    earning = EARNING_PER_VIEW_FIRST if current_views < 1000 else EARNING_PER_VIEW_AFTER
-
-    await db.videos.update_one(
-        {"video_id": input_data.video_id},
-        {"$inc": {"views": 1, "earnings": earning}}
-    )
-
-    # Also update user balance
-    await db.users.update_one(
-        {"user_id": video["user_id"]},
-        {"$inc": {"balance": earning}}
-    )
-
-    # Update daily analytics
-    now = datetime.now(timezone.utc)
-    await db.daily_analytics.update_one(
-        {"user_id": video["user_id"], "year": now.year, "month": now.month, "day": now.day},
-        {"$inc": {"views": 1, "earnings": earning}},
-        upsert=True
-    )
-
-    # Update monthly analytics
-    await db.monthly_analytics.update_one(
-        {"user_id": video["user_id"], "year": now.year, "month": now.month},
-        {"$inc": {"views": 1, "earnings": earning}},
-        upsert=True
-    )
-
-    updated = await db.videos.find_one({"video_id": input_data.video_id}, {"_id": 0})
-    return {
-        "counted": True,
-        "views": updated["views"],
-        "earnings": round(updated["earnings"], 4),
-        "earned_this_view": earning,
-    }
-
-@api_router.get("/videos")
-async def get_videos(request: Request, search: str = ""):
-    """Dashboard API - list user's videos"""
+async def require_admin(request: Request):
     user = await get_current_user(request)
-    query = {"user_id": user["user_id"]}
-    if search:
-        query["file_name"] = {"$regex": search, "$options": "i"}
-    videos = await db.videos.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+# Admin: Get all videos
+@api_router.get("/admin/videos")
+async def admin_get_videos(request: Request, status: str = ""):
+    await require_admin(request)
+    query = {}
+    if status:
+        query["status"] = status
+    videos = await db.videos.find(query, {"_id": 0}).sort("createdAt", -1).to_list(500)
     return videos
 
-@api_router.delete("/videos/{video_id}")
-async def delete_video(video_id: str, request: Request):
-    """Dashboard API - delete a video"""
-    user = await get_current_user(request)
-    result = await db.videos.delete_one({"video_id": video_id, "user_id": user["user_id"]})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Video not found")
-    return {"message": "Video deleted"}
+# Admin: Approve/Reject/Delete video
+@api_router.post("/admin/video-action")
+async def admin_video_action(input_data: AdminVideoAction, request: Request):
+    await require_admin(request)
+    vid = input_data.video_id
+    if input_data.action == "delete":
+        await db.videos.delete_one({"$or": [{"video_id": vid}, {"code": vid}]})
+        return {"message": "Video deleted"}
+    elif input_data.action in ("approve", "reject"):
+        await db.videos.update_one({"$or": [{"video_id": vid}, {"code": vid}]}, {"$set": {"status": "approved" if input_data.action == "approve" else "rejected"}})
+        return {"message": f"Video {input_data.action}d"}
+    raise HTTPException(status_code=400, detail="Invalid action")
 
-# ─── Player App Endpoints (Public) ───
+# Admin: Set global CPM
+@api_router.post("/admin/set-cpm")
+async def admin_set_cpm(input_data: AdminCPMUpdate, request: Request):
+    await require_admin(request)
+    await db.settings.update_one({"key": "global_cpm"}, {"$set": {"key": "global_cpm", "value": input_data.cpm}}, upsert=True)
+    return {"message": f"CPM set to ${input_data.cpm}", "cpm": input_data.cpm}
 
-@api_router.get("/watch/{code}")
-async def watch_video(code: str):
-    """Public - Player app fetches video data by code"""
-    video = await db.videos.find_one({"video_id": code}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
+# Admin: Get current CPM
+@api_router.get("/admin/get-cpm")
+async def admin_get_cpm(request: Request):
+    await require_admin(request)
+    cpm = await get_global_cpm()
+    return {"cpm": cpm}
 
-    # Get Telegram file download URL
-    file_url = None
-    if TELEGRAM_TOKEN and video.get("file_id"):
-        try:
-            async with httpx.AsyncClient() as http:
-                resp = await http.get(f"{TELEGRAM_API}/getFile", params={"file_id": video["file_id"]})
-                data = resp.json()
-                if data.get("ok"):
-                    file_path = data["result"]["file_path"]
-                    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        except Exception as e:
-            logger.error(f"Failed to get Telegram file URL: {e}")
+# Admin: Toggle allow download
+@api_router.post("/admin/settings")
+async def admin_update_settings(input_data: AdminSettingsUpdate, request: Request):
+    await require_admin(request)
+    if input_data.allow_download is not None:
+        await db.settings.update_one({"key": "allow_download"}, {"$set": {"key": "allow_download", "value": input_data.allow_download}}, upsert=True)
+    return {"message": "Settings updated"}
 
-    return {
-        "video_id": video["video_id"],
-        "file_id": video["file_id"],
-        "file_name": video["file_name"],
-        "file_url": file_url,
-        "views": video.get("views", 0),
-        "earnings": video.get("earnings", 0),
-        "user_id": video.get("user_id", ""),
-        "created_at": video.get("created_at", ""),
-    }
+@api_router.get("/admin/settings")
+async def admin_get_settings(request: Request):
+    await require_admin(request)
+    cpm = await get_global_cpm()
+    dl = await db.settings.find_one({"key": "allow_download"}, {"_id": 0})
+    return {"cpm": cpm, "allow_download": dl.get("value", True) if dl else True}
 
-@api_router.get("/public/related/{code}")
-async def get_related_videos(code: str):
-    """Public - Player app fetches related videos"""
-    current = await db.videos.find_one({"video_id": code}, {"_id": 0})
-    if not current:
-        return []
+# Admin: Update user subscription
+@api_router.post("/admin/subscription")
+async def admin_update_subscription(input_data: AdminSubscriptionUpdate, request: Request):
+    await require_admin(request)
+    if input_data.subscription not in ("free", "basic", "premium"):
+        raise HTTPException(status_code=400, detail="Invalid subscription type")
+    result = await db.users.update_one({"user_id": input_data.user_id}, {"$set": {"subscription": input_data.subscription}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": f"Subscription set to {input_data.subscription}"}
 
-    # Get other videos from same user, then random others
-    related = await db.videos.find(
-        {"video_id": {"$ne": code}},
-        {"_id": 0}
-    ).sort("views", -1).limit(10).to_list(10)
+# Admin: List all users
+@api_router.get("/admin/users")
+async def admin_get_users(request: Request):
+    await require_admin(request)
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+    return users
 
-    return related
-
-class UpdateViewsInput(BaseModel):
-    video_id: str
-    watch_percentage: float = 0  # 0-100
-
-@api_router.post("/update-views")
-async def update_views(input_data: UpdateViewsInput):
-    """Public - Player app calls at 80% watch to count view"""
-    video = await db.videos.find_one({"video_id": input_data.video_id}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    if input_data.watch_percentage < 80:
-        return {
-            "counted": False,
-            "message": "Minimum 80% watch required",
-            "watch_percentage": input_data.watch_percentage,
-        }
-
-    # Tiered CPM
-    current_views = video.get("views", 0)
-    earning = EARNING_PER_VIEW_FIRST if current_views < 1000 else EARNING_PER_VIEW_AFTER
-
-    await db.videos.update_one(
-        {"video_id": input_data.video_id},
-        {"$inc": {"views": 1, "earnings": earning}}
-    )
-
-    # Update user balance
-    await db.users.update_one(
-        {"user_id": video["user_id"]},
-        {"$inc": {"balance": earning}}
-    )
-
-    # Update daily analytics
-    now = datetime.now(timezone.utc)
-    await db.daily_analytics.update_one(
-        {"user_id": video["user_id"], "year": now.year, "month": now.month, "day": now.day},
-        {"$inc": {"views": 1, "earnings": earning}},
-        upsert=True
-    )
-
-    # Update monthly analytics
-    await db.monthly_analytics.update_one(
-        {"user_id": video["user_id"], "year": now.year, "month": now.month},
-        {"$inc": {"views": 1, "earnings": earning}},
-        upsert=True
-    )
-
-    updated = await db.videos.find_one({"video_id": input_data.video_id}, {"_id": 0})
-    return {
-        "counted": True,
-        "views": updated["views"],
-        "earnings": round(updated["earnings"], 4),
-        "earned_this_view": earning,
-    }
-
-# ─── Telegram Bot Webhook ───
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+# ═══════════════════════════════════════
+#  TELEGRAM BOT WEBHOOK
+# ═══════════════════════════════════════
 
 async def telegram_send(chat_id: int, text: str, parse_mode: str = "HTML"):
-    """Send message to Telegram user"""
     async with httpx.AsyncClient() as http:
-        await http.post(f"{TELEGRAM_API}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-        })
+        await http.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
 
 @api_router.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
-    """Telegram sends updates here when users interact with bot"""
     body = await request.json()
     message = body.get("message", {})
     chat_id = message.get("chat", {}).get("id")
     text = message.get("text", "")
-
     if not chat_id:
         return {"ok": True}
 
-    # Handle /start command
     if text.startswith("/start"):
-        await telegram_send(chat_id,
-            "<b>Welcome to Merawala Bot!</b>\n\n"
-            "Just send any <b>video or file</b> and I'll give you an earning link!\n\n"
-            "Share the link → People watch → You earn money!\n\n"
-            "CPM: $1 (first 1K) → $2 (after 1K)\n"
-            "Min watch: 20 seconds"
-        )
+        await telegram_send(chat_id, "<b>Welcome to Merawala Bot!</b>\n\nJust send any <b>video or file</b> and I'll give you an earning link!\n\nShare the link → People watch → You earn money!")
         return {"ok": True}
 
-    # Handle /api command - link API key (optional, for linking to dashboard account)
     if text.startswith("/api "):
         api_key = text[5:].strip()
-        logger.info(f"Telegram /api command - key received: {api_key[:6]}...{api_key[-4:]}")
         user = await db.users.find_one({"api_key": api_key}, {"_id": 0})
         if not user:
-            logger.info(f"Key not found. Total users in DB: {await db.users.count_documents({})}")
-            await telegram_send(chat_id,
-                "Key not matched. But don't worry!\n\n"
-                "Just send any video directly — link will be generated automatically!"
-            )
+            await telegram_send(chat_id, "Key not matched. Just send a video directly — link will be generated automatically!")
             return {"ok": True}
-
-        # Store chat_id → api_key mapping
-        await db.telegram_users.update_one(
-            {"chat_id": chat_id},
-            {"$set": {"chat_id": chat_id, "api_key": api_key, "user_id": user["user_id"], "linked_at": datetime.now(timezone.utc).isoformat()}},
-            upsert=True
-        )
-        masked = api_key[:4] + "****" + api_key[-4:]
-        await telegram_send(chat_id, f"API key linked successfully!\nKey: <code>{masked}</code>\n\nNow send any video to get an earning link!")
+        await db.telegram_users.update_one({"chat_id": chat_id}, {"$set": {"chat_id": chat_id, "api_key": api_key, "user_id": user["user_id"], "linked_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+        await telegram_send(chat_id, f"API key linked! Now send any video to get an earning link.")
         return {"ok": True}
 
-    # Handle /help command
     if text.startswith("/help"):
-        await telegram_send(chat_id,
-            "<b>Merawala Bot Commands:</b>\n\n"
-            "/start - Welcome message\n"
-            "/api YOUR_KEY - Link your API key\n"
-            "/help - Show this help\n\n"
-            "Just send any video or file to get an earning link!"
-        )
+        await telegram_send(chat_id, "<b>Commands:</b>\n/start - Welcome\n/api KEY - Link API key\n/help - Help\n\nJust send a video!")
         return {"ok": True}
 
-    # Handle video/document upload
+    # Handle file upload
     file_id = None
     file_name = "video"
-
     if message.get("video"):
         file_id = message["video"]["file_id"]
-        file_name = message["video"].get("file_name", f"video_{message['video'].get('file_unique_id', 'unknown')}.mp4")
+        file_name = message["video"].get("file_name", f"video_{message['video'].get('file_unique_id', 'x')}.mp4")
     elif message.get("document"):
         file_id = message["document"]["file_id"]
         file_name = message["document"].get("file_name", "file")
@@ -813,87 +797,64 @@ async def telegram_webhook(request: Request):
         file_name = message["animation"].get("file_name", "animation.gif")
 
     if file_id:
-        # Find or auto-create user for this Telegram chat
+        # Auto-create user if not linked
         tg_user = await db.telegram_users.find_one({"chat_id": chat_id}, {"_id": 0})
-
         if not tg_user:
-            # Auto-create a bot user for this Telegram account
-            tg_username = message.get("from", {}).get("username", "")
             tg_name = message.get("from", {}).get("first_name", "Bot User")
             user_id = f"tg_{chat_id}"
-
-            # Check if user already exists
             existing = await db.users.find_one({"user_id": user_id}, {"_id": 0})
             if not existing:
                 await db.users.insert_one({
-                    "user_id": user_id,
-                    "email": f"tg_{chat_id}@telegram.bot",
-                    "name": tg_name,
-                    "role": "user",
-                    "subscription": "free",
-                    "balance": 0.0,
-                    "api_key": generate_api_key(),
-                    "telegram_chat_id": chat_id,
+                    "user_id": user_id, "email": f"tg_{chat_id}@telegram.bot", "name": tg_name,
+                    "role": "user", "subscription": "free", "balance": 0.0,
+                    "api_key": generate_api_key(), "telegram_chat_id": chat_id,
                     "created_at": datetime.now(timezone.utc),
                 })
-
-            await db.telegram_users.update_one(
-                {"chat_id": chat_id},
-                {"$set": {"chat_id": chat_id, "user_id": user_id, "linked_at": datetime.now(timezone.utc).isoformat()}},
-                upsert=True
-            )
+            await db.telegram_users.update_one({"chat_id": chat_id}, {"$set": {"chat_id": chat_id, "user_id": user_id, "linked_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
             tg_user = await db.telegram_users.find_one({"chat_id": chat_id}, {"_id": 0})
 
-        # Generate link
-        video_id = uuid.uuid4().hex[:10]
-        video_doc = {
-            "video_id": video_id,
-            "user_id": tg_user["user_id"],
-            "file_id": file_id,
-            "file_name": file_name,
-            "views": 0,
-            "earnings": 0.0,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.videos.insert_one(video_doc)
-
-        base_url = os.environ.get("FRONTEND_URL", "https://merawala.xyz")
-        link = f"{base_url}/watch/{video_id}"
-
-        await telegram_send(chat_id,
-            f"<b>Link Generated!</b>\n\n"
-            f"File: {file_name}\n"
-            f"Link: {link}\n\n"
-            f"Share this link to earn!\n"
-            f"$1 CPM (first 1000) → $2 CPM (after 1000)"
-        )
+        # Generate video entry
+        code = generate_code(10)
+        video_url = await get_telegram_file_url(file_id)
+        share_link = f"{BASE_URL}/watch/{code}"
+        await db.videos.insert_one({
+            "code": code, "video_id": code, "shareLink": share_link,
+            "title": file_name, "description": "", "thumbnail": "",
+            "videoUrl": video_url or "", "file_id": file_id, "file_name": file_name,
+            "views": 0, "validViews": 0, "earnings": 0.0,
+            "status": "approved", "ownerId": tg_user["user_id"], "user_id": tg_user["user_id"],
+            "createdAt": datetime.now(timezone.utc).isoformat(), "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        await telegram_send(chat_id, f"<b>Link Generated!</b>\n\nFile: {file_name}\nLink: {share_link}\n\nShare this link to earn!\n$1 CPM (first 1K) → $2 CPM (after 1K)")
         return {"ok": True}
 
-    # Unknown message
     if text and not text.startswith("/"):
-        await telegram_send(chat_id, "Send a video or file to get an earning link!\n\nNeed help? Send /help")
-
+        await telegram_send(chat_id, "Send a video or file to get an earning link!\n/help for commands")
     return {"ok": True}
 
-# ─── Root ───
+# ═══════════════════════════════════════
+#  ROOT
+# ═══════════════════════════════════════
+
 @api_router.get("/")
 async def root():
-    return {"message": "Merawala API"}
+    return {"message": "Merawala API", "version": "2.0", "status": "synced"}
 
-# Include router
+# Include router + CORS
 app.include_router(api_router)
-
-# CORS - Allow both web dashboard and player app
 frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url, "http://localhost:3000", "https://monetavideo.preview.emergentagent.com", "https://merawala.xyz"],
+    allow_origins=[frontend_url, "http://localhost:3000", "https://monetavideo.preview.emergentagent.com", "https://merawala.xyz", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─── Seed Data ───
+# ═══════════════════════════════════════
+#  SEED DATA
+# ═══════════════════════════════════════
+
 async def seed_admin_and_demo(database):
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
@@ -902,134 +863,67 @@ async def seed_admin_and_demo(database):
     existing = await database.users.find_one({"email": admin_email})
     if existing is None:
         await database.users.insert_one({
-            "user_id": admin_user_id,
-            "email": admin_email,
-            "name": "Admin",
-            "password_hash": hash_password(admin_password),
-            "role": "admin",
-            "subscription": "premium",
-            "balance": 247.85,
-            "api_key": generate_api_key(),
+            "user_id": admin_user_id, "email": admin_email, "name": "Admin",
+            "password_hash": hash_password(admin_password), "role": "admin",
+            "subscription": "premium", "balance": 247.85, "api_key": generate_api_key(),
             "created_at": datetime.now(timezone.utc),
         })
         logger.info("Admin user seeded")
     else:
         admin_user_id = existing.get("user_id", admin_user_id)
-        if not verify_password(admin_password, existing.get("password_hash", "")):
+        if existing.get("password_hash") and not verify_password(admin_password, existing["password_hash"]):
             await database.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
-        # Ensure subscription field exists
         if "subscription" not in existing:
             await database.users.update_one({"email": admin_email}, {"$set": {"subscription": "premium"}})
 
-    # Seed demo links
-    existing_links = await database.links.count_documents({"user_id": admin_user_id})
-    if existing_links == 0:
-        demo_links = [
-            {"title": "Premium Course Bundle", "original_url": "https://example.com/course-bundle.zip", "views": 12450, "earnings": 87.15},
-            {"title": "Photo Editing Pack", "original_url": "https://example.com/photo-pack.zip", "views": 8930, "earnings": 62.51},
-            {"title": "Music Collection 2025", "original_url": "https://example.com/music.zip", "views": 15780, "earnings": 110.46},
-            {"title": "Software Toolkit v3", "original_url": "https://example.com/toolkit.zip", "views": 6230, "earnings": 43.61},
-            {"title": "Video Templates HD", "original_url": "https://example.com/templates.zip", "views": 19450, "earnings": 136.15},
-            {"title": "E-book Library", "original_url": "https://example.com/ebooks.zip", "views": 4320, "earnings": 30.24},
-            {"title": "Game Mods Pack", "original_url": "https://example.com/mods.zip", "views": 22100, "earnings": 154.70},
-            {"title": "Wallpaper Collection 4K", "original_url": "https://example.com/wallpapers.zip", "views": 3150, "earnings": 22.05},
-        ]
-        for dl in demo_links:
-            await database.links.insert_one({
-                "link_id": str(uuid.uuid4()),
-                "user_id": admin_user_id,
-                "title": dl["title"],
-                "original_url": dl["original_url"],
-                "short_code": generate_short_code(),
-                "views": dl["views"],
-                "earnings": dl["earnings"],
-                "created_at": (datetime.now(timezone.utc) - timedelta(days=random.randint(1, 60))).isoformat(),
-            })
-        logger.info("Demo links seeded")
+    # Seed test video if none exist
+    vc = await database.videos.count_documents({})
+    if vc == 0:
+        test_code = generate_code(10)
+        await database.videos.insert_one({
+            "code": test_code, "video_id": test_code, "shareLink": f"{BASE_URL}/watch/{test_code}",
+            "title": "Sample Video", "description": "This is a sample video for testing",
+            "thumbnail": "", "videoUrl": "", "file_id": "", "file_name": "sample_video.mp4",
+            "views": 150, "validViews": 142, "earnings": 0.284,
+            "status": "approved", "ownerId": admin_user_id, "user_id": admin_user_id,
+            "createdAt": datetime.now(timezone.utc).isoformat(), "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info(f"Test video seeded: {test_code}")
 
-    # Seed daily analytics
-    existing_daily = await database.daily_analytics.count_documents({"user_id": admin_user_id})
-    if existing_daily == 0:
-        for month in range(1, 13):
-            days_in_month = 28 if month == 2 else (30 if month in [4, 6, 9, 11] else 31)
-            for day in range(1, days_in_month + 1):
-                views = random.randint(200, 3500)
-                earnings = round(views * random.uniform(0.005, 0.009), 2)
-                await database.daily_analytics.insert_one({
-                    "user_id": admin_user_id,
-                    "year": 2025,
-                    "month": month,
-                    "day": day,
-                    "views": views,
-                    "earnings": earnings,
-                })
-        logger.info("Daily analytics seeded")
-
-    # Seed monthly analytics
-    existing_monthly = await database.monthly_analytics.count_documents({"user_id": admin_user_id})
-    if existing_monthly == 0:
-        for month in range(1, 13):
-            views = random.randint(15000, 85000)
-            earnings = round(views * random.uniform(0.006, 0.008), 2)
-            await database.monthly_analytics.insert_one({
-                "user_id": admin_user_id,
-                "year": 2025,
-                "month": month,
-                "views": views,
-                "earnings": earnings,
-            })
-        logger.info("Monthly analytics seeded")
+    # Seed default settings
+    cpm_exists = await database.settings.find_one({"key": "global_cpm"})
+    if not cpm_exists:
+        await database.settings.insert_one({"key": "global_cpm", "value": DEFAULT_CPM})
+    dl_exists = await database.settings.find_one({"key": "allow_download"})
+    if not dl_exists:
+        await database.settings.insert_one({"key": "allow_download", "value": True})
 
     # Write test credentials
     cred_dir = Path("/app/memory")
     cred_dir.mkdir(exist_ok=True)
     with open(cred_dir / "test_credentials.md", "w") as f:
-        f.write(f"# Test Credentials\n\n")
-        f.write(f"## Admin Account\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n")
-        f.write(f"## Auth Endpoints\n- POST /api/auth/register\n- POST /api/auth/login\n- POST /api/auth/logout\n- GET /api/auth/me\n- POST /api/auth/refresh\n- POST /api/auth/google/session\n")
+        f.write(f"# Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n")
 
-    # Create indexes (safe - skip if conflicts with existing data)
+    # Safe index creation
+    for idx in [
+        (database.users, "email", True), (database.users, "api_key", False),
+        (database.videos, "code", False), (database.videos, "video_id", False),
+        (database.videos, "ownerId", False), (database.telegram_users, "chat_id", True),
+        (database.login_attempts, "identifier", False), (database.view_logs, "key", False),
+    ]:
+        try:
+            await idx[0].create_index(idx[1], unique=idx[2])
+        except Exception:
+            pass
+    # TTL on view_logs (auto-delete after 1 hour)
     try:
-        await database.users.create_index("email", unique=True)
-    except Exception:
-        pass
-    try:
-        await database.users.create_index("api_key")
-    except Exception:
-        pass
-    try:
-        await database.links.create_index("user_id")
-    except Exception:
-        pass
-    try:
-        await database.videos.create_index("video_id", unique=True)
-    except Exception:
-        pass
-    try:
-        await database.videos.create_index("user_id")
-    except Exception:
-        pass
-    try:
-        await database.telegram_users.create_index("chat_id", unique=True)
-    except Exception:
-        pass
-    try:
-        await database.login_attempts.create_index("identifier")
-    except Exception:
-        pass
-    try:
-        await database.daily_analytics.create_index([("user_id", 1), ("year", 1), ("month", 1)])
-    except Exception:
-        pass
-    try:
-        await database.monthly_analytics.create_index([("user_id", 1), ("year", 1)])
+        await database.view_logs.create_index("timestamp", expireAfterSeconds=3600)
     except Exception:
         pass
 
 @app.on_event("startup")
 async def startup():
     await seed_admin_and_demo(db)
-    # Set Telegram webhook - always use preview URL for webhook (our backend)
     if TELEGRAM_TOKEN:
         webhook_url = "https://earn-track-pro-2.preview.emergentagent.com/api/telegram/webhook"
         try:
@@ -1037,7 +931,7 @@ async def startup():
                 resp = await http.post(f"{TELEGRAM_API}/setWebhook", json={"url": webhook_url})
                 logger.info(f"Telegram webhook set: {resp.json()}")
         except Exception as e:
-            logger.error(f"Failed to set Telegram webhook: {e}")
+            logger.error(f"Webhook error: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
