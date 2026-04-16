@@ -76,7 +76,7 @@ export default function LinksPage() {
   };
 
   const copyLink = (shortCode) => {
-    navigator.clipboard.writeText(`https://ms.link/${shortCode}`);
+    navigator.clipboard.writeText(`https://merawala.xyz/${shortCode}`);
     toast.success('Link copied to clipboard');
   };
 
@@ -150,7 +150,7 @@ export default function LinksPage() {
                       <TableCell className="text-white font-medium text-sm">{link.title}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <span className="text-purple-400 text-sm font-mono">ms.link/{link.short_code}</span>
+                          <span className="text-purple-400 text-sm font-mono">merawala.xyz/{link.short_code}</span>
                           <button
                             onClick={() => copyLink(link.short_code)}
                             data-testid={`copy-link-button-${idx}`}

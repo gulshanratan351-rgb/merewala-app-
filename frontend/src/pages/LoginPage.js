@@ -56,7 +56,7 @@ export default function LoginPage() {
             <h1 className="text-2xl font-semibold text-white tracking-tight" style={{ fontFamily: 'Outfit' }}>
               Welcome back
             </h1>
-            <p className="text-sm text-zinc-400 mt-2">Sign in to your MonetizeStream account</p>
+            <p className="text-sm text-zinc-400 mt-2">Sign in to your Merawala account</p>
           </div>
 
           {error && (

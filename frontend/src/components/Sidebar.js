@@ -28,7 +28,7 @@ export default function Sidebar() {
           <Zap className="w-5 h-5 text-white" strokeWidth={1.5} />
         </div>
         <span className="text-white font-semibold text-lg tracking-tight" style={{ fontFamily: 'Outfit' }}>
-          MonetizeStream
+          Merawala
         </span>
       </div>
 

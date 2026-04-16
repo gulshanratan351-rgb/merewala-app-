@@ -55,7 +55,7 @@ export default function RegisterPage() {
             <h1 className="text-2xl font-semibold text-white tracking-tight" style={{ fontFamily: 'Outfit' }}>
               Create account
             </h1>
-            <p className="text-sm text-zinc-400 mt-2">Start monetizing your content today</p>
+            <p className="text-sm text-zinc-400 mt-2">Start earning with Merawala today</p>
           </div>
 
           {error && (

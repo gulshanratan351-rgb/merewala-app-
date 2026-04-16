@@ -472,7 +472,7 @@ async def bot_upload(request: Request):
     }
     await db.links.insert_one(link_doc)
     link_doc.pop("_id", None)
-    return {"short_link": f"https://ms.link/{short_code}", "link": link_doc}
+    return {"short_link": f"https://merawala.xyz/{short_code}", "link": link_doc}
 
 # ─── Root ───
 @api_router.get("/")
