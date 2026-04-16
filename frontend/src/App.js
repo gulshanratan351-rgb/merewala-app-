@@ -6,7 +6,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
 import DashboardPage from '@/pages/DashboardPage';
-import LinksPage from '@/pages/LinksPage';
+import MyVideosPage from '@/pages/MyVideosPage';
 import BillingPage from '@/pages/BillingPage';
 import BotInfoPage from '@/pages/BotInfoPage';
 import VideoPlayerPage from '@/pages/VideoPlayerPage';
@@ -29,7 +29,7 @@ function AppRouter() {
       <Route path="/v/:videoId" element={<VideoPlayerPage />} />
       <Route path="/watch/:videoId" element={<VideoPlayerPage />} />
       <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-      <Route path="/links" element={<ProtectedRoute><LinksPage /></ProtectedRoute>} />
+      <Route path="/my-videos" element={<ProtectedRoute><MyVideosPage /></ProtectedRoute>} />
       <Route path="/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
       <Route path="/bot" element={<ProtectedRoute><BotInfoPage /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />

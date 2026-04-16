@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { LayoutDashboard, Link2, Wallet, Bot, LogOut, Menu, X, Zap, Shield } from 'lucide-react';
+import { LayoutDashboard, Film, Wallet, Bot, LogOut, Menu, X, Zap, Shield } from 'lucide-react';
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/links', label: 'Link Manager', icon: Link2 },
+  { path: '/my-videos', label: 'My Videos', icon: Film },
+  { path: '/bot', label: 'Bot Integration', icon: Bot },
   { path: '/billing', label: 'Billing', icon: Wallet },
-  { path: '/bot', label: 'Bot & API', icon: Bot },
   { path: '/admin', label: 'Admin', icon: Shield },
 ];
 
