@@ -636,26 +636,23 @@ async def telegram_webhook(request: Request):
     if text.startswith("/start"):
         await telegram_send(chat_id,
             "<b>Welcome to Merawala Bot!</b>\n\n"
-            "1. First link your API key:\n"
-            "<code>/api YOUR_API_KEY</code>\n\n"
-            "2. Then send any video/document to get a earning link!\n\n"
-            "Get your API key from merawala.xyz → Bot & API"
+            "Just send any <b>video or file</b> and I'll give you an earning link!\n\n"
+            "Share the link → People watch → You earn money!\n\n"
+            "CPM: $1 (first 1K) → $2 (after 1K)\n"
+            "Min watch: 20 seconds"
         )
         return {"ok": True}
 
-    # Handle /api command - link API key
+    # Handle /api command - link API key (optional, for linking to dashboard account)
     if text.startswith("/api "):
         api_key = text[5:].strip()
         logger.info(f"Telegram /api command - key received: {api_key[:6]}...{api_key[-4:]}")
         user = await db.users.find_one({"api_key": api_key}, {"_id": 0})
         if not user:
-            # Try partial match in case of copy-paste issues
             logger.info(f"Key not found. Total users in DB: {await db.users.count_documents({})}")
             await telegram_send(chat_id,
-                "Invalid API key.\n\n"
-                "Go to dashboard → Bot & API → Copy key\n"
-                "Then send: /api YOUR_KEY\n\n"
-                "Make sure you copy the FULL key starting with ms_"
+                "Key not matched. But don't worry!\n\n"
+                "Just send any video directly — link will be generated automatically!"
             )
             return {"ok": True}
 
@@ -695,11 +692,35 @@ async def telegram_webhook(request: Request):
         file_name = message["animation"].get("file_name", "animation.gif")
 
     if file_id:
-        # Find linked user
+        # Find or auto-create user for this Telegram chat
         tg_user = await db.telegram_users.find_one({"chat_id": chat_id}, {"_id": 0})
+
         if not tg_user:
-            await telegram_send(chat_id, "Please link your API key first!\nSend: <code>/api YOUR_API_KEY</code>\n\nGet your key at merawala.xyz → Bot & API")
-            return {"ok": True}
+            # Auto-create a bot user for this Telegram account
+            tg_username = message.get("from", {}).get("username", "")
+            tg_name = message.get("from", {}).get("first_name", "Bot User")
+            user_id = f"tg_{chat_id}"
+
+            # Check if user already exists
+            existing = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+            if not existing:
+                await db.users.insert_one({
+                    "user_id": user_id,
+                    "email": f"tg_{chat_id}@telegram.bot",
+                    "name": tg_name,
+                    "role": "user",
+                    "balance": 0.0,
+                    "api_key": generate_api_key(),
+                    "telegram_chat_id": chat_id,
+                    "created_at": datetime.now(timezone.utc),
+                })
+
+            await db.telegram_users.update_one(
+                {"chat_id": chat_id},
+                {"$set": {"chat_id": chat_id, "user_id": user_id, "linked_at": datetime.now(timezone.utc).isoformat()}},
+                upsert=True
+            )
+            tg_user = await db.telegram_users.find_one({"chat_id": chat_id}, {"_id": 0})
 
         # Generate link
         video_id = uuid.uuid4().hex[:10]
