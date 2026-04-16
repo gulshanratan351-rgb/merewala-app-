@@ -833,12 +833,34 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 # ═══════════════════════════════════════
-#  ROOT
+#  ROOT + ANDROID APP LINKS
 # ═══════════════════════════════════════
 
 @api_router.get("/")
 async def root():
     return {"message": "Merawala API", "version": "2.0", "status": "synced"}
+
+# Android App Links - assetlinks.json
+# Served at /.well-known/assetlinks.json for domain verification
+ASSET_LINKS = [
+    {
+        "relation": ["delegate_permission/common.handle_all_urls"],
+        "target": {
+            "namespace": "android_app",
+            "package_name": "com.merewala.app",
+            "sha256_cert_fingerprints": [
+                "FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C"
+            ]
+        }
+    }
+]
+
+from fastapi.responses import JSONResponse
+
+@app.get("/.well-known/assetlinks.json")
+async def asset_links():
+    """Android App Links verification file"""
+    return JSONResponse(content=ASSET_LINKS, media_type="application/json")
 
 # Include router + CORS
 app.include_router(api_router)
